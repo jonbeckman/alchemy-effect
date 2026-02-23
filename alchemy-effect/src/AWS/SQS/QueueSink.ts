@@ -5,11 +5,12 @@ import * as Sink from "effect/Sink";
 
 import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output/index.ts";
+import { Runtime } from "../../Runtime.ts";
 import * as Lambda from "../Lambda/index.ts";
 import type { Queue } from "./Queue.ts";
 
 export const sink = Effect.fn(function* <Q extends Queue>(queue: Q) {
-  yield* QueueSinkPolicy.bind(queue);
+  yield* Binding.fn<QueueSink>("AWS.SQS.QueueSink")(queue);
   const QueueUrl = yield* queue.queueUrl();
   return Sink.forEachArray(
     Effect.fnUntraced(function* (messages) {
@@ -26,21 +27,24 @@ export const sink = Effect.fn(function* <Q extends Queue>(queue: Q) {
   );
 });
 
-export class QueueSinkPolicy extends Binding.Policy<Queue>()(
+export class QueueSink extends Binding.Service(
   "AWS.SQS.QueueSink",
+  Effect.fn(function* (queue: Queue) {
+    const runtime = yield* Runtime;
+    if (Lambda.isFunction(runtime)) {
+      yield* runtime.bind({
+        policyStatements: [
+          {
+            Sid: "QueueSink",
+            Effect: "Allow",
+            Action: ["sqs:SendMessageBatch"],
+            Resource: [Output.interpolate`${queue.queueArn()}`],
+          },
+        ],
+      });
+    }
+    return yield* Effect.die(
+      `QueueSinkBinding requires a Lambda Function runtime`,
+    );
+  }),
 ) {}
-
-export const QueueSinkLambda = Binding.effect(
-  [Lambda.Function, QueueSinkPolicy],
-  (self, queue) =>
-    Effect.succeed({
-      policyStatements: [
-        {
-          Sid: "QueueSink",
-          Effect: "Allow",
-          Action: ["sqs:SendMessageBatch"],
-          Resource: [Output.interpolate`${queue.queueArn()}`],
-        },
-      ],
-    }),
-);

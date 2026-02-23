@@ -1,68 +1,78 @@
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { Resource } from "../../Resource.ts";
+import * as Binding from "../../Binding.ts";
+import { Runtime } from "../../Runtime.ts";
 import * as Lambda from "../Lambda/index.ts";
-import type { Bucket } from "./Bucket.ts";
+import * as SQS from "../SQS/index.ts";
+import type { S3EventType } from "./S3Event.ts";
+import type * as S3 from "./index.ts";
 
-export interface BucketEventSourceProps<
-  B extends Bucket,
-  F extends Lambda.Function,
-> {
-  bucket: B;
-  function: F;
-}
-
-export interface BucketEventSource<
-  ID extends string,
-  B extends Bucket,
-  F extends Lambda.Function,
-> extends Resource<
-  "AWS.S3.BucketEventSource",
-  ID,
-  BucketEventSourceProps<B, F>,
-  {}
-> {}
-
-export const BucketEventSource = Resource<{
-  <const ID extends string, B extends Bucket, F extends Lambda.Function>(
-    id: ID,
-    props: BucketEventSourceProps<B, F>,
-  ): Effect.Effect<BucketEventSource<ID, B, F>>;
-}>("AWS.S3.BucketEventSource");
-
-export const BucketEventSourceProvider = Layer.effect(
-  BucketEventSource,
-  Effect.gen(function* () {
-    return BucketEventSource.of({
-      create: Effect.fn(function* (input) {
-        return undefined!;
-      }),
-      delete: Effect.fn(function* (input) {
-        return undefined!;
-      }),
-      update: Effect.fn(function* (input) {
-        return undefined!;
-      }),
-    });
-  }),
+export const BucketEventSource = Binding.fn<BucketEventSourceBinding>(
+  "AWS.S3.BindEventSource",
 );
-// export const BucketEventSourceLambda = Binding.effect(
-//   [Lambda.Function, BucketEventSource],
-//   Effect.fn(function* (self, bucket) {
-//     yield* Lambda.EventSourceMapping(`${bucket.id}-EventSource`, {
-//       functionName: yield* self.functionName(),
-//       eventSourceArn: yield* bucket.bucketArn(),
-//     });
 
-//     return {
-//       policyStatements: [
-//         {
-//           Sid: "S3BucketEventSource",
-//           Effect: "Allow",
-//           Action: ["s3:GetObject"],
-//           Resource: yield* bucket.bucketArn(),
-//         },
-//       ],
-//     };
-//   }),
-// );
+export class BucketEventSourceBinding extends Binding.Service(
+  "AWS.S3.BindEventSource",
+  Effect.fn(function* (
+    bucket: S3.Bucket,
+    {
+      queue,
+      events: Events = ["s3:ObjectCreated:*"],
+    }: {
+      queue?: SQS.Queue;
+      events?: S3EventType[];
+    } = {},
+  ) {
+    const runtime = yield* Runtime;
+
+    if (Lambda.isFunction(runtime)) {
+      yield* Lambda.Permission("Permission", {
+        action: "lambda.InvokeFunction",
+        functionName: yield* runtime.functionName(),
+        principal: "s3.amazonaws.com",
+        sourceArn: yield* bucket.bucketArn(),
+      });
+      yield* bucket.bind({
+        notificationConfiguration: {
+          LambdaFunctionConfigurations: [
+            {
+              LambdaFunctionArn: yield* runtime.functionArn(),
+              Events,
+            },
+          ],
+        },
+      });
+    } else if (queue) {
+      const q = queue ?? (yield* SQS.Queue(`${bucket.id}-BucketEvents`));
+      yield* q.bind({
+        policyStatements: [
+          {
+            Sid: `AllowS3EventsFrom${bucket.id}`,
+            Effect: "Allow",
+            Action: ["sqs:SendMessage"],
+            Resource: [yield* q.queueArn()],
+            Condition: {
+              ArnEquals: {
+                "aws:SourceArn": yield* bucket.bucketArn(),
+              },
+            },
+          },
+        ],
+      });
+      yield* bucket.bind({
+        notificationConfiguration: {
+          QueueConfigurations: [
+            {
+              QueueArn: yield* q.queueArn(),
+              Events,
+            },
+          ],
+        },
+      });
+      return q;
+    } else {
+      return yield* Effect.die(
+        `S3 Notifications are not supported in runtime '${runtime.type}'`,
+      );
+    }
+  }),
+) {}

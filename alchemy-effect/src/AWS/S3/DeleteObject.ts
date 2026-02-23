@@ -2,34 +2,48 @@ import * as S3 from "distilled-aws/s3";
 import * as Effect from "effect/Effect";
 import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output/index.ts";
+import { Runtime } from "../../Runtime.ts";
 import * as Lambda from "../Lambda/index.ts";
 import type { Bucket } from "./Bucket.ts";
 
-export interface DeleteObjectRequest
-  extends Omit<S3.DeleteObjectRequest, "Bucket"> {}
+export interface DeleteObjectRequest extends Omit<
+  S3.DeleteObjectRequest,
+  "Bucket"
+> {}
 
-export const DeleteObject = Binding.make(
+export const DeleteObject = Effect.fn(function* <B extends Bucket>(bucket: B) {
+  yield* bindDeleteObject(bucket);
+  const BucketName = yield* bucket.bucketName();
+  Effect.fn("AWS.S3.DeleteObject")(function* (request: DeleteObjectRequest) {
+    return yield* S3.deleteObject({
+      ...request,
+      Bucket: yield* BucketName,
+    });
+  });
+});
+
+export const bindDeleteObject = Binding.fn<DeleteObjectBinding>(
   "AWS.S3.DeleteObject",
-  <B extends Bucket>(bucket: B) =>
-    Binding.fn(bucket, function* (request: DeleteObjectRequest) {
-      return yield* S3.deleteObject({
-        ...request,
-        Bucket: yield* bucket.bucketName(),
-      });
-    }),
 );
 
-export const DeleteObjectLambda = Binding.effect(
-  [Lambda.Function, DeleteObject],
-  (func, bucket) =>
-    Effect.succeed({
-      policyStatements: [
-        {
-          Sid: "DeleteObject",
-          Effect: "Allow",
-          Action: ["s3:DeleteObject", "s3:DeleteObjectVersion"],
-          Resource: [Output.interpolate`${bucket.bucketArn()}/*`],
-        },
-      ],
-    }),
-);
+export class DeleteObjectBinding extends Binding.Service(
+  "AWS.S3.DeleteObject",
+  Effect.fn(function* <B extends Bucket>(bucket: B) {
+    const runtime = yield* Runtime;
+    if (Lambda.isFunction(runtime)) {
+      yield* runtime.bind({
+        policyStatements: [
+          {
+            Sid: "DeleteObject",
+            Effect: "Allow",
+            Action: ["s3:DeleteObject", "s3:DeleteObjectVersion"],
+            Resource: [Output.interpolate`${bucket.bucketArn()}/*`],
+          },
+        ],
+      });
+    }
+    return yield* Effect.die(
+      `DeleteObjectBinding does not support runtime '${runtime.type}'`,
+    );
+  }),
+) {}

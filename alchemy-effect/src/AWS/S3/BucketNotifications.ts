@@ -1,18 +1,14 @@
 import type lambda from "aws-lambda";
 import * as Effect from "effect/Effect";
-import { flow } from "effect/Function";
 import * as Stream from "effect/Stream";
 
-import * as Binding from "../../Binding.ts";
 import { Runtime } from "../../Runtime.ts";
-import * as Lambda from "../Lambda/index.ts";
 import * as SQS from "../SQS/index.ts";
 import type { Bucket } from "./Bucket.ts";
 import { BucketEventSource } from "./BucketEventSource.ts";
 import type { S3EventType } from "./S3Event.ts";
 
-export type S3Event = lambda.S3Event;
-export type S3EventRecord = {
+export type BucketNotification = {
   type: S3EventType;
   bucket: string;
   key: string;
@@ -20,7 +16,7 @@ export type S3EventRecord = {
   eTag: string;
 };
 
-export const isS3Event = (event: any): event is S3Event =>
+export const isS3Event = (event: any): event is lambda.S3Event =>
   Array.isArray(event.Records) &&
   event.Records.some((record: any) => record.s3);
 
@@ -35,27 +31,29 @@ export const notifications = <
   bucket: B,
   props: NotificationsProps<Events>,
 ) => ({
-  subscribe: Effect.fn(function* <Err = never, Req = never>(
+  subscribe: Effect.fn(function* <Req = never, StreamReq = never>(
     process: (
-      stream: Stream.Stream<S3EventRecord>,
-    ) => Effect.Effect<void, Err, Req>,
+      stream: Stream.Stream<BucketNotification, never, StreamReq>,
+    ) => Effect.Effect<void, never, Req>,
   ) {
     // Bind the Bucket's bucketName Output to `this` environment
     const BucketName = yield* bucket.bucketName();
 
     const runtime = yield* Runtime;
 
+    const parseEvent = (record: lambda.S3EventRecord) => ({
+      type: record.eventName as S3EventType,
+      bucket: record.s3.bucket.name,
+      key: record.s3.object.key,
+      size: record.s3.object.size,
+      eTag: record.s3.object.eTag,
+    });
+
     if (runtime.listen) {
-      if (Lambda.isFunction(runtime)) {
-        yield* BucketEventSource(`${bucket.id}-EventSource`, {
-          functionArn: yield* runtime.functionArn(),
-          bucket,
-        });
-      } else {
-        return yield* Effect.die(
-          `S3 Notifications are not supported in runtime '${runtime.type}'`,
-        );
-      }
+      yield* BucketEventSource(bucket, {
+        events: props.events,
+      });
+
       yield* runtime.listen(
         Effect.gen(function* () {
           const bucketName = yield* BucketName;
@@ -65,85 +63,39 @@ export const notifications = <
                 (record) => record.s3.bucket.name === bucketName,
               );
               if (events.length > 0) {
-                return process(
-                  Stream.fromArray(
-                    events.map((record) => ({
-                      type: record.eventName as S3EventType,
-                      bucket: record.s3.bucket.name,
-                      key: record.s3.object.key,
-                      size: record.s3.object.size,
-                      eTag: record.s3.object.eTag,
-                    })),
-                  ),
-                ).pipe(Effect.orDie);
+                return process(Stream.fromArray(events.map(parseEvent))).pipe(
+                  Effect.orDie,
+                );
               }
             }
           };
         }),
       );
     } else {
+      // if we're running outside a Lambda Function, we need to put messages in SQS queue
+      // and then consume from it. Lambda can be invoked directly by S3 which is handy.
       const queue = yield* SQS.Queue(`${bucket.id}-BucketEvents`);
 
-      yield* BucketNotifications(bucket, { queue });
+      yield* BucketEventSource(bucket, {
+        queue,
+        events: props.events,
+      });
 
-      return yield* SQS.messages(queue).subscribe(
-        flow(
-          Stream.mapEffect((message) =>
-            Effect.try({
-              try: () => JSON.parse(message.body) as S3Event,
-              catch: (error) => Effect.die(error),
-            }),
-          ),
+      yield* SQS.messages(queue).subscribe((stream) =>
+        stream.pipe(
+          Stream.flatMap((event) => Stream.fromArray(event.Records)),
+          Stream.mapEffect((message) => {
+            try {
+              return Effect.succeed(JSON.parse(message.body) as lambda.S3Event);
+            } catch (error) {
+              return Effect.die(error);
+            }
+          }),
+          Stream.flatMap((event) => Stream.fromArray(event.Records)),
+          Stream.map((event) => parseEvent(event)),
+          process,
         ),
       );
     }
   }),
 });
-
-export interface BucketNotificationsProps<B extends Bucket> {
-  bucket: B;
-}
-
-export const BucketNotifications = Binding.call<BucketNotificationsBinding>(
-  "AWS.S3.BucketNotifications",
-);
-
-export class BucketNotificationsBinding extends Binding.fn(
-  "AWS.S3.BucketNotifications",
-  Effect.fn(function* <B extends Bucket, Q extends SQS.Queue>({
-    bucket,
-    queue,
-  }: {
-    bucket: B;
-    queue: Q;
-  }) {
-    yield* Events.Rule("BucketEvents", {
-      eventPattern: {
-        source: ["aws.s3"],
-        detail: {
-          bucket: {
-            name: [yield* bucket.bucketName()],
-          },
-        },
-      },
-      targets: [
-        {
-          Id: "SqsTarget",
-          Arn: yield* queue.queueArn(),
-          RoleArn: { "Fn::GetAtt": ["EventBridgeToSqsRole", "Arn"] },
-          InputTransformer: {
-            InputPathsMap: {
-              detailType: "$.detail-type",
-              bucket: "$.detail.bucket.name",
-              key: "$.detail.object.key",
-              size: "$.detail.object.size",
-              etag: "$.detail.object.etag",
-            },
-            InputTemplate:
-              '{"type": <detailType>, "bucket": <bucket>, "key": <key>, "size": <size>, "eTag": <etag>}',
-          },
-        },
-      ],
-    });
-  }),
-) {}

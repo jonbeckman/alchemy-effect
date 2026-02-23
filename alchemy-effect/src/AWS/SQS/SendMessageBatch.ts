@@ -6,38 +6,37 @@ import { Runtime } from "../../Runtime.ts";
 import * as Lambda from "../Lambda/index.ts";
 import type { Queue } from "./Queue.ts";
 
-export interface SendMessageRequest<Q extends Queue> extends Omit<
-  sqs.SendMessageRequest,
-  "QueueUrl" | "MessageBody"
-> {
-  MessageBody: Q["props"]["schema"]["Type"];
-}
+export interface SendMessageBatchRequest
+  extends Omit<sqs.SendMessageBatchRequest, "QueueUrl"> {}
 
-export const SendMessage = Effect.fn(function* <Q extends Queue>(queue: Q) {
-  yield* bindSendMessage(queue);
+export const SendMessageBatch = Effect.fn(function* <Q extends Queue>(
+  queue: Q,
+) {
+  yield* bindSendMessageBatch(queue);
   const QueueUrl = yield* queue.queueUrl();
-  Effect.fn("AWS.SQS.SendMessage")(function* (request: SendMessageRequest<Q>) {
-    return yield* sqs.sendMessage({
+  return Effect.fn("AWS.SQS.SendMessageBatch")(function* (
+    request: SendMessageBatchRequest,
+  ) {
+    return yield* sqs.sendMessageBatch({
       ...request,
       QueueUrl: yield* QueueUrl,
-      MessageBody: JSON.stringify(request.MessageBody),
     });
   });
 });
 
-export const bindSendMessage = Binding.fn<SendMessageBinding>(
-  "AWS.SQS.SendMessage",
+export const bindSendMessageBatch = Binding.fn<SendMessageBatchBinding>(
+  "AWS.SQS.SendMessageBatch",
 );
 
-export class SendMessageBinding extends Binding.Service(
-  "AWS.SQS.SendMessage",
+export class SendMessageBatchBinding extends Binding.Service(
+  "AWS.SQS.SendMessageBatch",
   Effect.fn(function* <Q extends Queue>(queue: Q) {
     const runtime = yield* Runtime;
     if (Lambda.isFunction(runtime)) {
       yield* runtime.bind({
         policyStatements: [
           {
-            Sid: "SendMessage",
+            Sid: "SendMessageBatch",
             Effect: "Allow",
             Action: ["sqs:SendMessage"],
             Resource: [Output.interpolate`${queue.queueArn()}`],
@@ -46,7 +45,7 @@ export class SendMessageBinding extends Binding.Service(
       });
     }
     return yield* Effect.die(
-      `SendMessageBinding does not support runtime '${runtime.type}'`,
+      `SendMessageBatchBinding does not support runtime '${runtime.type}'`,
     );
   }),
 ) {}

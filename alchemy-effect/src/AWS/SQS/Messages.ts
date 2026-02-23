@@ -1,28 +1,120 @@
-import * as sqs from "distilled-aws/sqs";
+import type * as lambda from "aws-lambda";
+import type * as sqs from "distilled-aws/sqs";
 import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 import { Runtime } from "../../Runtime.ts";
-import * as Lambda from "../Lambda/index.ts";
+import { DeleteMessageBatch } from "./DeleteMessageBatch.ts";
 import type { Queue } from "./Queue.ts";
+import {
+  QueueEventSource,
+  type QueueEventSourceProps,
+} from "./QueueEventSource.ts";
+import { ReceiveMessage } from "./ReceiveMessage.ts";
 
-export const messages = <Q extends Queue>(queue: Q) => {
-  subscribe: Effect.fn(function* <Q extends Queue>(queue: Q) {
-    const QueueUrl = yield* queue.queueUrl();
+export interface MessagesProps extends QueueEventSourceProps {
+  /**
+   * Time in seconds for long polling when using the process (run) path.
+   * @default 20
+   */
+  waitTimeSeconds?: number;
+  /**
+   * Maximum number of messages to receive per poll when using the process (run) path.
+   * @default 10
+   */
+  maxNumberOfMessages?: number;
+}
 
+const isSQSEvent = (event: any): event is lambda.SQSEvent =>
+  Array.isArray(event?.Records) &&
+  event.Records.length > 0 &&
+  event.Records[0].eventSource === "aws:sqs";
+
+export const messages = <Q extends Queue>(
+  queue: Q,
+  props: MessagesProps = {},
+) => ({
+  subscribe: Effect.fn(function* <StreamReq = never, EffectReq = never>(
+    process: (
+      stream: Stream.Stream<lambda.SQSRecord, never, StreamReq>,
+    ) => Effect.Effect<void, never, EffectReq>,
+  ) {
     const runtime = yield* Runtime;
 
-    if (runtime.listen) {
-      if (Lambda.isFunction(runtime)) {
-        yield* Lambda.EventSourceMapping(`${queue.id}-EventSourceMapping`, {
-          functionArn: yield* runtime.functionArn(),
-          queue,
-        });
-      }
-    }
+    const QueueArn = yield* queue.queueArn();
 
-    return Effect.fn(function* () {
-      return yield* sqs.receiveMessage({
-        QueueUrl: yield* QueueUrl,
-      });
-    });
-  });
-};
+    if (runtime.listen) {
+      yield* QueueEventSource(queue, props);
+
+      yield* runtime.listen(
+        Effect.gen(function* () {
+          const queueArn = yield* QueueArn;
+          return (event: any) => {
+            if (isSQSEvent(event)) {
+              const records = event.Records.filter(
+                (record) =>
+                  record.eventSource === "aws:sqs" &&
+                  record.eventSourceARN === queueArn,
+              );
+              if (records.length > 0) {
+                return process(Stream.fromArray(records)).pipe(Effect.orDie);
+              }
+            }
+          };
+        }),
+      );
+    } else {
+      const receiveMessage = yield* ReceiveMessage(queue);
+      const deleteMessageBatch = yield* DeleteMessageBatch(queue);
+
+      yield* runtime.run(
+        Effect.forever(
+          Effect.gen(function* () {
+            const queueArn = yield* QueueArn;
+            const result = yield* receiveMessage({
+              MaxNumberOfMessages: props.maxNumberOfMessages ?? 10,
+              WaitTimeSeconds: props.waitTimeSeconds ?? 20,
+            });
+
+            const messages = result.Messages ?? [];
+            if (messages.length === 0) return;
+
+            const records = messages.map((msg) => toSQSRecord(msg, queueArn));
+
+            yield* process(Stream.fromArray(records)).pipe(Effect.orDie);
+
+            yield* deleteMessageBatch({
+              Entries: messages.map((msg, i) => ({
+                Id: msg.MessageId ?? String(i),
+                ReceiptHandle: msg.ReceiptHandle!,
+              })),
+            });
+          }),
+        ).pipe(Effect.orDie),
+      );
+    }
+  }),
+});
+
+function toSQSRecord(
+  msg: sqs.Message,
+  eventSourceARN: string,
+): lambda.SQSRecord {
+  return {
+    // TODO(sam): empty strings is bad, what should we do?
+    messageId: msg.MessageId ?? "",
+    receiptHandle: msg.ReceiptHandle ?? "",
+    body: msg.Body ?? "",
+    attributes: {
+      ApproximateReceiveCount: msg.Attributes?.ApproximateReceiveCount ?? "0",
+      SentTimestamp: msg.Attributes?.SentTimestamp ?? "0",
+      SenderId: msg.Attributes?.SenderId ?? "",
+      ApproximateFirstReceiveTimestamp:
+        msg.Attributes?.ApproximateFirstReceiveTimestamp ?? "0",
+    },
+    messageAttributes: {},
+    md5OfBody: msg.MD5OfBody ?? "",
+    eventSource: "aws:sqs",
+    eventSourceARN,
+    awsRegion: "",
+  };
+}

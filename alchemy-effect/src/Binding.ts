@@ -2,7 +2,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ServiceMap from "effect/ServiceMap";
 import type { Input } from "./Input.ts";
+import { Phase } from "./Phase.ts";
 import type { ResourceClass, ResourceLike } from "./Resource.ts";
+import { Runtime } from "./Runtime.ts";
 import type { Instance } from "./Util/instance.ts";
 
 export interface Binding<
@@ -76,3 +78,46 @@ const BindingService = <R extends ResourceClass, B extends Binding>(
   ServiceMap.Service<[ResourceClass.Instance<R>, B["resource"]], any>()(
     `${resource.type}(${binding.tag})`,
   );
+
+export type BindingFn<Req = never> = (
+  ...args: any[]
+) => Effect.Effect<void, never, Req | Runtime>;
+
+export interface BindingTag<
+  Tag extends string,
+  Fn extends BindingFn<Req> = any,
+  Req = any,
+> extends ServiceMap.Service<Tag, Fn> {
+  tag: Tag;
+  fn: Fn;
+  Req: Req;
+  new (): BindingTag<Tag, Fn, Req>;
+}
+
+export const fn = <B extends BindingTag<any, any, any>>(
+  tag: B["tag"],
+): ((
+  ...args: Parameters<B["fn"]>
+) => Effect.Effect<void, never, B | B["Req"]>) =>
+  Effect.fn(function* () {
+    if ((yield* Phase) === "plan") {
+      return yield* Service(tag);
+    } else {
+      return (yield* Runtime).get(tag);
+    }
+  }) as (
+    ...args: Parameters<B["fn"]>
+  ) => Effect.Effect<void, never, B | B["Req"]>;
+
+export const Service: {
+  <const Tag extends string>(tag: Tag): BindingTag<Tag>;
+  <const Tag extends string, Fn extends BindingFn<Req>, Req = never>(
+    tag: Tag,
+    fn: Fn,
+  ): BindingTag<Tag, Fn, Req>;
+} = ((...[tag, fn]: [string, (...args: any[]) => any] | [string]) =>
+  fn
+    ? ServiceMap.Service()(tag, {
+        make: Effect.succeed(fn),
+      })
+    : ServiceMap.Service()(tag)) as any;

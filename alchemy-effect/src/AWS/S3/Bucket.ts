@@ -2,13 +2,13 @@ import { Region } from "distilled-aws/Region";
 import type { BucketLocationConstraint } from "distilled-aws/s3";
 import * as s3 from "distilled-aws/s3";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 import type { Input } from "../../Input.ts";
 import { createPhysicalName } from "../../PhysicalName.ts";
 import { Resource } from "../../Resource.ts";
 import { diffTags } from "../../Tags.ts";
 import { type AccountID, Account } from "../Account.ts";
+import type { PolicyStatement } from "../IAM/Policy.ts";
 import type { RegionID } from "../Region.ts";
 
 export type BucketName = string;
@@ -77,12 +77,15 @@ export interface Bucket<
   "AWS.S3.Bucket",
   ID,
   Props,
-  BucketAttrs<Input.Resolve<Props>>
+  BucketAttrs<Input.Resolve<Props>>,
+  {
+    notificationConfiguration?: s3.NotificationConfiguration;
+    policyStatements?: PolicyStatement[];
+  }
 > {}
 
 export const BucketProvider = () =>
-  Layer.effect(
-    Bucket,
+  Bucket.provider.effect(
     Effect.gen(function* () {
       const createBucketName = (
         id: string,
@@ -175,7 +178,7 @@ export const BucketProvider = () =>
             return { action: "replace" } as const;
           }
         }),
-        create: Effect.fn(function* ({ id, news, session }) {
+        create: Effect.fn(function* ({ id, news, session, bindings }) {
           const region = yield* Region;
           const accountId = yield* Account;
           const bucketName = yield* createBucketName(id, news);
@@ -244,6 +247,20 @@ export const BucketProvider = () =>
             });
           }
 
+          // Apply bucket policy from binding policyStatements
+          const policyStatements = bindings.flatMap(
+            (b) => b.policyStatements ?? [],
+          );
+          if (policyStatements.length > 0) {
+            yield* s3.putBucketPolicy({
+              Bucket: bucketName,
+              Policy: JSON.stringify({
+                Version: "2012-10-17",
+                Statement: policyStatements,
+              }),
+            });
+          }
+
           yield* session.note(`Created bucket: ${bucketName}`);
 
           return {
@@ -256,7 +273,13 @@ export const BucketProvider = () =>
             accountId,
           };
         }),
-        update: Effect.fn(function* ({ news, olds, output, session }) {
+        update: Effect.fn(function* ({
+          news,
+          olds,
+          output,
+          session,
+          bindings,
+        }) {
           // Diff tags to determine what changed
           const oldTags = (olds.tags as Record<string, string>) ?? {};
           const newTags = (news.tags as Record<string, string>) ?? {};
@@ -284,6 +307,31 @@ export const BucketProvider = () =>
                 `Removed all tags from bucket: ${output.bucketName}`,
               );
             }
+          }
+
+          // Apply bucket policy from binding policyStatements
+          const policyStatements = bindings.flatMap(
+            (b) => b.policyStatements ?? [],
+          );
+          if (policyStatements.length > 0) {
+            const newPolicy = JSON.stringify({
+              Version: "2012-10-17",
+              Statement: policyStatements,
+            });
+            const existingPolicy = yield* s3
+              .getBucketPolicy({ Bucket: output.bucketName })
+              .pipe(
+                Effect.map((r) => r.Policy),
+                Effect.catchTag("NoSuchBucketPolicy", () => Effect.void),
+              );
+            if (existingPolicy !== newPolicy) {
+              yield* s3.putBucketPolicy({
+                Bucket: output.bucketName,
+                Policy: newPolicy,
+              });
+            }
+          } else {
+            yield* s3.deleteBucketPolicy({ Bucket: output.bucketName });
           }
 
           return output;

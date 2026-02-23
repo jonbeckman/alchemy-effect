@@ -62,5 +62,9 @@ export interface Function<
         code: {
           hash: string;
         };
+      },
+      {
+        policyStatements?: PolicyStatement[];
+        env?: Record<string, Input<string>>;
       }
     > {}

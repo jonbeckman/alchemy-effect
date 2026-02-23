@@ -46,7 +46,6 @@ export const Resources = () =>
     EC2.VpcProvider(),
     Kinesis.StreamProvider(),
     Lambda.FunctionProvider(),
-    S3.BucketPolicyProvider(),
     S3.BucketProvider(),
     SQS.QueueProvider(),
   );

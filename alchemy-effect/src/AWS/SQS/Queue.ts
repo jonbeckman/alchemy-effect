@@ -2,13 +2,13 @@ import type * as lambda from "aws-lambda";
 import { Region } from "distilled-aws/Region";
 import * as sqs from "distilled-aws/sqs";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 import type * as S from "effect/Schema";
 
 import { createPhysicalName } from "../../PhysicalName.ts";
 import { Resource } from "../../Resource.ts";
 import { Account } from "../Account.ts";
+import type { PolicyStatement } from "../IAM/Policy.ts";
 
 export type QueueRecord<Data> = Omit<lambda.SQSRecord, "body"> & {
   body: Data;
@@ -16,24 +16,6 @@ export type QueueRecord<Data> = Omit<lambda.SQSRecord, "body"> & {
 
 export type QueueEvent<Data> = Omit<lambda.SQSEvent, "Records"> & {
   Records: QueueRecord<Data>[];
-};
-
-export const Queue = Resource<{
-  <const ID extends string, const Props extends QueueProps = QueueProps>(
-    id: ID,
-    props?: Props,
-  ): Effect.Effect<Queue<ID, Props>>;
-}>("AWS.SQS.Queue");
-
-export interface Queue<
-  ID extends string = string,
-  Props extends QueueProps = QueueProps,
-> extends Resource<"AWS.SQS.Queue", ID, Props, QueueAttrs<Props>> {}
-
-export type QueueAttrs<Props extends QueueProps> = {
-  queueName: Props["queueName"] extends string ? Props["queueName"] : string;
-  queueUrl: Props["fifo"] extends true ? `${string}.fifo` : string;
-  queueArn: `arn:aws:sqs:${string}:${string}:${Props["queueName"]}`;
 };
 
 export type QueueProps<Msg = any> = {
@@ -98,9 +80,32 @@ export type QueueProps<Msg = any> = {
     }
 );
 
+export interface Queue<
+  ID extends string = string,
+  Props extends QueueProps = QueueProps,
+> extends Resource<
+  "AWS.SQS.Queue",
+  ID,
+  Props,
+  {
+    queueName: Props["queueName"] extends string ? Props["queueName"] : string;
+    queueUrl: Props["fifo"] extends true ? `${string}.fifo` : string;
+    queueArn: `arn:aws:sqs:${string}:${string}:${Props["queueName"]}`;
+  },
+  {
+    policyStatements: PolicyStatement[];
+  }
+> {}
+
+export const Queue = Resource<{
+  <const ID extends string, const Props extends QueueProps = QueueProps>(
+    id: ID,
+    props?: Props,
+  ): Effect.Effect<Queue<ID, Props>>;
+}>("AWS.SQS.Queue");
+
 export const QueueProvider = () =>
-  Layer.effect(
-    Queue,
+  Queue.provider.effect(
     Effect.gen(function* () {
       const region = yield* Region;
       const accountId = yield* Account;
@@ -121,7 +126,10 @@ export const QueueProvider = () =>
           });
           return props.fifo ? `${baseName}.fifo` : baseName;
         });
-      const createAttributes = (props: QueueProps) => {
+      const createAttributes = (
+        props: QueueProps,
+        bindings: Queue["binding"][],
+      ) => {
         const baseAttributes: Record<string, string | undefined> = {
           DelaySeconds: props.delaySeconds?.toString(),
           MaximumMessageSize: props.maximumMessageSize?.toString(),
@@ -129,6 +137,13 @@ export const QueueProvider = () =>
           ReceiveMessageWaitTimeSeconds:
             props.receiveMessageWaitTimeSeconds?.toString(),
           VisibilityTimeout: props.visibilityTimeout?.toString(),
+          Policy:
+            bindings.length > 0
+              ? JSON.stringify({
+                  Version: "2012-10-17",
+                  Statement: bindings.flatMap((p) => p.policyStatements),
+                })
+              : undefined,
         };
 
         if (props.fifo) {
@@ -145,7 +160,7 @@ export const QueueProvider = () =>
 
         return baseAttributes;
       };
-      return {
+      return Queue.provider.of({
         stables: ["queueName", "queueUrl", "queueArn"],
         diff: Effect.fn(function* ({ id, news, olds }) {
           const oldFifo = olds.fifo ?? false;
@@ -160,12 +175,12 @@ export const QueueProvider = () =>
           }
           // Return undefined to allow update function to be called for other attribute changes
         }),
-        create: Effect.fn(function* ({ id, news, session }) {
+        create: Effect.fn(function* ({ id, news, session, bindings }) {
           const queueName = yield* createQueueName(id, news);
           const response = yield* sqs
             .createQueue({
               QueueName: queueName,
-              Attributes: createAttributes(news),
+              Attributes: createAttributes(news, bindings),
             })
             .pipe(
               Effect.retry({
@@ -189,10 +204,10 @@ export const QueueProvider = () =>
             queueArn: queueArn,
           };
         }),
-        update: Effect.fn(function* ({ news, output, session }) {
+        update: Effect.fn(function* ({ news, output, session, bindings }) {
           yield* sqs.setQueueAttributes({
             QueueUrl: output.queueUrl,
-            Attributes: createAttributes(news),
+            Attributes: createAttributes(news, bindings),
           });
           yield* session.note(output.queueUrl);
           return output;
@@ -204,6 +219,6 @@ export const QueueProvider = () =>
             })
             .pipe(Effect.catchTag("QueueDoesNotExist", () => Effect.void));
         }),
-      };
+      });
     }),
   );
