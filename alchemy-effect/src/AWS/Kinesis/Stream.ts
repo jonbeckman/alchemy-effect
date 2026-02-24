@@ -5,23 +5,15 @@ import { Region } from "distilled-aws/Region";
 import * as kinesis from "distilled-aws/kinesis";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
-import type * as S from "effect/Schema";
-
 import type * as lambda from "aws-lambda";
 import { createPhysicalName } from "../../PhysicalName.ts";
 import { Resource } from "../../Resource.ts";
 import { createInternalTags, diffTags } from "../../Tags.ts";
 import { Account } from "../Account.ts";
 
-export type StreamRecord<Data> = Omit<lambda.KinesisStreamRecord, "kinesis"> & {
-  kinesis: Omit<lambda.KinesisStreamRecordPayload, "data"> & {
-    data: Data;
-  };
-};
+export type StreamRecord = lambda.KinesisStreamRecord;
 
-export type StreamEvent<Data> = Omit<lambda.KinesisStreamEvent, "Records"> & {
-  Records: StreamRecord<Data>[];
-};
+export type StreamEvent = lambda.KinesisStreamEvent;
 
 export const Stream = Resource<{
   <const ID extends string, const Props extends StreamProps>(
@@ -45,11 +37,7 @@ export type StreamStatus = "CREATING" | "DELETING" | "ACTIVE" | "UPDATING";
 
 export type StreamMode = "PROVISIONED" | "ON_DEMAND";
 
-export type StreamProps<Data = any> = {
-  /**
-   * Schema for the record data.
-   */
-  schema: S.Schema<Data>;
+export type StreamProps = {
   /**
    * Name of the stream.
    * @default ${app}-${stage}-${id}

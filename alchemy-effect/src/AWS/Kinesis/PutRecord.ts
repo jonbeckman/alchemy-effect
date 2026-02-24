@@ -7,22 +7,19 @@ import * as AWS from "../index.ts";
 import * as Lambda from "../Lambda/index.ts";
 import type { Stream } from "./Stream.ts";
 
-export interface PutRecordRequest<S extends Stream> extends Omit<
+export interface PutRecordRequest extends Omit<
   Kinesis.PutRecordInput,
-  "StreamName" | "Data"
-> {
-  Data: S["props"]["schema"]["Type"];
-}
+  "StreamName"
+> {}
 
 export const PutRecord = Effect.fn(function* <S extends Stream>(stream: S) {
   yield* bindPutRecord(stream);
   const StreamName = yield* stream.streamName();
   return yield* AWS.withContext(
-    Effect.fn(function* (request: PutRecordRequest<S>) {
+    Effect.fn(function* (request: PutRecordRequest) {
       return yield* Kinesis.putRecord({
         ...request,
         StreamName: yield* StreamName,
-        Data: new TextEncoder().encode(JSON.stringify(request.Data)),
       });
     }),
   );
