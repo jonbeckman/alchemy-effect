@@ -5,10 +5,11 @@ import {
   type RequestOptions,
 } from "cloudflare/core";
 import type { ErrorData } from "cloudflare/resources";
-import * as Data from "effect/Data";
-import * as Option from "effect/Option";
-import * as Effect from "effect/Effect";
 import { Config } from "effect";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as ServiceMap from "effect/ServiceMap";
 
 export const CLOUDFLARE_BASE_URL = Config.string("CLOUDFLARE_BASE_URL").pipe(
   Config.option,
@@ -23,34 +24,36 @@ export const CLOUDFLARE_API_EMAIL = Config.string("CLOUDFLARE_API_EMAIL").pipe(
   Config.option,
 );
 
-export class CloudflareApi extends Effect.Service<CloudflareApi>()(
-  "cloudflare/api",
-  {
-    effect: Effect.fn(function* (options?: {
-      baseUrl?: string;
-      apiToken?: string;
-      apiKey?: string;
-      apiEmail?: string;
-    }) {
-      return createRecursiveProxy(
-        new Cloudflare({
-          baseURL:
-            options?.baseUrl ??
-            (yield* CLOUDFLARE_BASE_URL).pipe(Option.getOrUndefined),
-          apiToken:
-            options?.apiToken ??
-            (yield* CLOUDFLARE_API_TOKEN).pipe(Option.getOrUndefined),
-          apiKey:
-            options?.apiKey ??
-            (yield* CLOUDFLARE_API_KEY).pipe(Option.getOrUndefined),
-          apiEmail:
-            options?.apiEmail ??
-            (yield* CLOUDFLARE_API_EMAIL).pipe(Option.getOrUndefined),
-        }),
-      );
-    }),
-  },
-) {}
+export interface CloudflareEffect extends ToEffect<Cloudflare> {}
+
+export class CloudflareApi extends ServiceMap.Service<
+  CloudflareApi,
+  CloudflareEffect
+>()("cloudflare/api", {
+  make: Effect.fn(function* (options?: {
+    baseUrl?: string;
+    apiToken?: string;
+    apiKey?: string;
+    apiEmail?: string;
+  }) {
+    return createRecursiveProxy(
+      new Cloudflare({
+        baseURL:
+          options?.baseUrl ??
+          (yield* CLOUDFLARE_BASE_URL).pipe(Option.getOrUndefined),
+        apiToken:
+          options?.apiToken ??
+          (yield* CLOUDFLARE_API_TOKEN).pipe(Option.getOrUndefined),
+        apiKey:
+          options?.apiKey ??
+          (yield* CLOUDFLARE_API_KEY).pipe(Option.getOrUndefined),
+        apiEmail:
+          options?.apiEmail ??
+          (yield* CLOUDFLARE_API_EMAIL).pipe(Option.getOrUndefined),
+      }),
+    );
+  }),
+}) {}
 
 export class CloudflareApiError extends Data.Error<{
   _tag:

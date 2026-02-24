@@ -1,13 +1,12 @@
 import * as Config from "effect/Config";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as ServiceMap from "effect/ServiceMap";
 import { App } from "../App.ts";
 
-export class Account extends Context.Tag("cloudflare/account-id")<
-  Account,
-  string
->() {}
+export class Account extends ServiceMap.Service<Account, string>()(
+  "cloudflare/account-id",
+) {}
 
 export const fromEnv = () =>
   Layer.effect(

@@ -4,7 +4,7 @@ import {
   type JsonRpcNotification,
   type JsonRpcRequest,
   type JsonRpcResponse,
-} from "@/aspect/lsp/jsonrpc";
+} from "@/Agent/lsp/jsonrpc";
 import { describe, expect, it } from "bun:test";
 
 const encoder = new TextEncoder();

@@ -1,4 +1,4 @@
-import { Account } from "@/cloudflare/account";
+import { Account } from "@/Cloudflare/Account";
 import { CloudflareApi } from "@/cloudflare/api";
 import * as CloudflareLive from "@/cloudflare/live";
 import * as R2 from "@/cloudflare/r2";

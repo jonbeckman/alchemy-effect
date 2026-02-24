@@ -16,6 +16,5 @@ export function replaceEffectStream<T>(value: T): ReplaceEffectStream<T> {
   return value as ReplaceEffectStream<T>;
 }
 
-function isEffectStream(value: unknown): value is Stream.Stream<any> {
-  return Predicate.hasProperty(value, Stream.StreamTypeId);
-}
+const isEffectStream = (value: unknown): value is Stream.Stream<any> =>
+  Predicate.hasProperty(value, "~effect/Stream");

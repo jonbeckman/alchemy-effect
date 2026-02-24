@@ -1,20 +1,22 @@
 import type { ExecutionContext } from "@cloudflare/workers-types";
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as ServiceMap from "effect/ServiceMap";
 
-export class CloudflareContext extends Context.Tag("Cloudflare.Context")<
+export class CloudflareContext extends ServiceMap.Service<
   CloudflareContext,
   {
     env: unknown;
     ctx: ExecutionContext;
   }
->() {}
+>()("Cloudflare.Context") {}
 
 export const getCloudflareEnvKey = Effect.fnUntraced(function* <T>(
   key: string,
 ) {
-  return yield* Effect.serviceOptional(CloudflareContext).pipe(
+  return yield* Effect.serviceOption(CloudflareContext).pipe(
+    Effect.map((context) => context.pipe(Option.getOrUndefined)),
     Effect.mapError(
       () =>
         new CloudflareContextNotFound({
@@ -22,12 +24,14 @@ export const getCloudflareEnvKey = Effect.fnUntraced(function* <T>(
         }),
     ),
     Effect.flatMap((context) => {
-      const env = context.env as Record<string, unknown>;
+      const env = context?.env as Record<string, unknown>;
       if (!(key in env)) {
-        return new CloudflareContextKeyNotFound({
-          message: `${key} is not set in cloudflare context (found ${Object.keys(env).join(", ")})`,
-          key,
-        });
+        return Effect.fail(
+          new CloudflareContextKeyNotFound({
+            message: `${key} is not set in cloudflare context (found ${Object.keys(env).join(", ")})`,
+            key,
+          }),
+        );
       }
       return Effect.succeed(env[key] as T);
     }),
