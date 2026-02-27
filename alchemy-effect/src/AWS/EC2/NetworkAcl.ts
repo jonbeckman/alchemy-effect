@@ -3,7 +3,6 @@ import { Region } from "distilled-aws/Region";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 
-import type { Input } from "../../Input.ts";
 import { Resource } from "../../Resource.ts";
 import { createInternalTags, createTagsList, diffTags } from "../../Tags.ts";
 import type { AccountID } from "../Account.ts";
@@ -23,12 +22,12 @@ export interface NetworkAclProps {
   /**
    * The VPC to create the network ACL in.
    */
-  vpcId: Input<VpcId>;
+  vpcId: VpcId;
 
   /**
    * Tags to assign to the network ACL.
    */
-  tags?: Record<string, Input<string>>;
+  tags?: Record<string, string>;
 }
 
 export interface NetworkAcl extends Resource<

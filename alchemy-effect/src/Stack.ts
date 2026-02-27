@@ -24,6 +24,9 @@ export class Stack extends ServiceMap.Service<
     resources: {
       [logicalId: string]: ResourceLike;
     };
+    bindings: {
+      [logicalId: string]: any[];
+    };
   }
 >()("Stack") {}
 
@@ -42,6 +45,7 @@ export const make =
                 name,
                 stage,
                 resources: {},
+                bindings: {},
               }) satisfies Stack["Service"],
           ),
         ),

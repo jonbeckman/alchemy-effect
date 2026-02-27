@@ -43,9 +43,9 @@ export interface RuleTarget {
   /** Unique identifier for this target within the rule. */
   Id: string;
   /** ARN of the target resource. */
-  Arn: Input<RuleArn>;
+  Arn: RuleArn;
   /** ARN of the IAM role to use for this target when the rule is triggered. */
-  RoleArn?: Input<string>;
+  RoleArn?: string;
   /** Valid JSON text passed to the target. Mutually exclusive with InputPath and InputTransformer. */
   Input?: string;
   /** JSONPath expression to extract from the event and send to the target. Mutually exclusive with Input and InputTransformer. */
@@ -82,7 +82,7 @@ export interface RuleTargetEcsParameters extends Omit<
   "TaskDefinitionArn"
 > {
   /** ARN of the ECS task definition to run. */
-  TaskDefinitionArn: Input<string>;
+  TaskDefinitionArn: string;
 }
 
 /** Batch parameters for a rule target with Input-wrapped ARN fields. */
@@ -91,13 +91,13 @@ export interface RuleTargetBatchParameters extends Omit<
   "JobDefinition"
 > {
   /** ARN or name of the Batch job definition. */
-  JobDefinition: Input<string>;
+  JobDefinition: string;
 }
 
 /** Dead-letter config for a rule target with Input-wrapped ARN. */
 export interface RuleTargetDeadLetterConfig {
   /** ARN of the SQS queue used as the dead-letter queue. */
-  Arn?: Input<string>;
+  Arn?: string;
 }
 
 export interface RuleProps {
@@ -116,7 +116,7 @@ export interface RuleProps {
    * The name or ARN of the event bus to associate with this rule.
    * If omitted, the default event bus is used.
    */
-  eventBusName?: Input<string>;
+  eventBusName?: string;
 
   /**
    * The event pattern that triggers this rule. Specified as a JSON-compatible object.
@@ -140,7 +140,7 @@ export interface RuleProps {
    * ARN of the IAM role associated with the rule. Required for targets that need
    * IAM roles (e.g. Kinesis, Step Functions, ECS, API Gateway).
    */
-  roleArn?: Input<string>;
+  roleArn?: string;
 
   /**
    * The targets to invoke when this rule is triggered. Maximum 5 targets per rule.

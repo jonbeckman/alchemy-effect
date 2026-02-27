@@ -36,12 +36,12 @@ export const LocalState = Layer.effect(
     const resource = ({
       stack,
       stage,
-      resourceId,
+      logicalId,
     }: {
       stack: string;
       stage: string;
-      resourceId: string;
-    }) => path.join(stateDir, stack, stage, `${resourceId}.json`);
+      logicalId: string;
+    }) => path.join(stateDir, stack, stage, `${logicalId}.json`);
 
     const ensure = yield* Effect.cachedFunction((dir: string) =>
       fs.makeDirectory(dir, { recursive: true }),
@@ -65,11 +65,11 @@ export const LocalState = Layer.effect(
         ),
       getReplacedResources: Effect.fnUntraced(function* (request) {
         return (yield* Effect.all(
-          (yield* state.list(request)).map((resourceId) =>
+          (yield* state.list(request)).map((logicalId) =>
             state.get({
               stack: request.stack,
               stage: request.stage,
-              resourceId,
+              logicalId: logicalId,
             }),
           ),
         )).filter((r) => r?.status === "replaced");

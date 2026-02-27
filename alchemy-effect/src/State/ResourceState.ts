@@ -1,5 +1,3 @@
-import type { BindNode } from "../Plan.ts";
-
 export type ResourceState =
   | CreatingResourceState
   | CreatedResourceState
@@ -27,7 +25,7 @@ interface BaseResourceState {
   /** List of logical IDs of resources that depend on this resource */
   downstream: string[];
   /** List of Bindings attached to this Resource */
-  bindings?: BindNode[];
+  bindings: any[];
   /** Desired state (input props) of this Resource */
   props?: Props;
   /** The output attributes of this Resource (if it has been created) */
@@ -55,6 +53,8 @@ export interface UpdatingReourceState extends BaseResourceState {
   old: {
     /** The old resource properties that have been successfully applied. */
     props: Props;
+    /** List of Bindings attached to this Resource */
+    bindings: any[];
     /** The old output properties that have been successfully applied. */
     attr: Attr;
     // TODO(sam): do I need to track the old downstream edges?

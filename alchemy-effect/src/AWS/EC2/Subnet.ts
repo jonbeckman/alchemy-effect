@@ -23,7 +23,7 @@ export interface SubnetProps {
   /**
    * The VPC to create the subnet in.
    */
-  vpcId: Input<VpcId>;
+  vpcId: VpcId;
 
   /**
    * The IPv4 network range for the subnet, in CIDR notation.
@@ -61,7 +61,7 @@ export interface SubnetProps {
   /**
    * The ID of an IPv6 IPAM pool which will be used to allocate this subnet an IPv6 CIDR.
    */
-  ipv6IpamPoolId?: Input<string>;
+  ipv6IpamPoolId?: string;
 
   /**
    * The netmask length of the IPv6 CIDR you want to allocate to this subnet from an IPAM pool.

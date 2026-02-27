@@ -6,7 +6,6 @@ import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 
 import type { ScopedPlanStatusSession } from "../../Cli/CLI.ts";
-import type { Input } from "../../Input.ts";
 import { Resource } from "../../Resource.ts";
 import { createInternalTags, createTagsList, diffTags } from "../../Tags.ts";
 import type { AccountID } from "../Account.ts";
@@ -29,7 +28,7 @@ export interface VpcEndpointProps {
   /**
    * The VPC to create the endpoint in.
    */
-  vpcId: Input<VpcId>;
+  vpcId: VpcId;
 
   /**
    * The service name.
@@ -51,19 +50,19 @@ export interface VpcEndpointProps {
    * The IDs of route tables for a Gateway endpoint.
    * Required for Gateway endpoints.
    */
-  routeTableIds?: Input<RouteTableId>[];
+  routeTableIds?: RouteTableId[];
 
   /**
    * The IDs of subnets for an Interface endpoint.
    * Required for Interface endpoints.
    */
-  subnetIds?: Input<SubnetId>[];
+  subnetIds?: SubnetId[];
 
   /**
    * The IDs of security groups for an Interface endpoint.
    * Required for Interface endpoints.
    */
-  securityGroupIds?: Input<SecurityGroupId>[];
+  securityGroupIds?: SecurityGroupId[];
 
   /**
    * Whether to associate a private hosted zone with the VPC.
@@ -94,7 +93,7 @@ export interface VpcEndpointProps {
   /**
    * Tags to assign to the VPC endpoint.
    */
-  tags?: Record<string, Input<string>>;
+  tags?: Record<string, string>;
 }
 
 export interface VpcEndpoint extends Resource<

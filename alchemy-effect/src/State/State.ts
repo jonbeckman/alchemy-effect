@@ -62,7 +62,7 @@ export interface StateService {
   get(request: {
     stack: string;
     stage: string;
-    resourceId: string;
+    logicalId: string;
   }): Effect.Effect<ResourceState | undefined, StateStoreError, never>;
   getReplacedResources(request: {
     stack: string;
@@ -71,13 +71,13 @@ export interface StateService {
   set<V extends ResourceState>(request: {
     stack: string;
     stage: string;
-    resourceId: string;
+    logicalId: string;
     value: V;
   }): Effect.Effect<V, StateStoreError, never>;
   delete(request: {
     stack: string;
     stage: string;
-    resourceId: string;
+    logicalId: string;
   }): Effect.Effect<void, StateStoreError, never>;
   list(request: {
     stack: string;

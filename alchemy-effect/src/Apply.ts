@@ -1,9 +1,6 @@
 import { Layer } from "effect";
 import * as Effect from "effect/Effect";
-import * as ServiceMap from "effect/ServiceMap";
 import type { Simplify } from "effect/Types";
-import type { Instance } from ".//Util/instance.ts";
-import { asEffect } from ".//Util/types.ts";
 import {
   type PlanStatusSession,
   type ScopedPlanStatusSession,
@@ -12,15 +9,9 @@ import {
 import type { ApplyStatus } from "./Cli/CLIEvent.ts";
 import { generateInstanceId, InstanceId } from "./InstanceId.ts";
 import * as Output from "./Output.ts";
-import {
-  type Apply,
-  type Delete,
-  type DerivePlan,
-  type IPlan,
-  plan,
-} from "./Plan.ts";
+import { type Apply, type Delete, type Plan, plan } from "./Plan.ts";
 import { getProviderByType } from "./Provider.ts";
-import type { Resource, ResourceLike } from "./Resource.ts";
+import type { ResourceLike } from "./Resource.ts";
 import { Stack } from "./Stack.ts";
 import { Stage } from "./Stage.ts";
 import {
@@ -37,7 +28,7 @@ import {
 } from "./State/index.ts";
 
 export type ApplyEffect<
-  P extends IPlan,
+  P extends Plan,
   Err = never,
   Req = never,
 > = Effect.Effect<
@@ -48,9 +39,9 @@ export type ApplyEffect<
   Req
 >;
 
-export type AppliedPlan<P extends IPlan> = {
+export type AppliedPlan<P extends Plan> = {
   [id in keyof P["resources"]]: P["resources"][id] extends
-    | Delete<Resource>
+    | Delete
     | undefined
     | never
     ? never
@@ -59,17 +50,9 @@ export type AppliedPlan<P extends IPlan> = {
 
 export const apply = <const Resources extends ResourceLike[] = never>(
   ...resources: Resources
-): ApplyEffect<
-  DerivePlan<Instance<Resources[number]>>,
-  never,
-  State | Providers<Instance<Resources[number]>>
-  // TODO(sam): don't cast to any
-> =>
-  plan(...resources).pipe(
-    Effect.flatMap((p) => applyPlan(p as any as IPlan)),
-  ) as any;
+) => plan(...resources).pipe(Effect.flatMap(applyPlan));
 
-export const applyPlan = <P extends IPlan>(plan: P) =>
+export const applyPlan = <P extends Plan>(plan: P) =>
   Effect.gen(function* () {
     const cli = yield* CLI;
     const session = yield* cli.startApplySession(plan);
@@ -95,7 +78,7 @@ export const applyPlan = <P extends IPlan>(plan: P) =>
   });
 
 const expandAndPivot = Effect.fnUntraced(function* (
-  plan: IPlan,
+  plan: Plan,
   session: PlanStatusSession,
 ) {
   const state = yield* State;
@@ -116,139 +99,17 @@ const expandAndPivot = Effect.fnUntraced(function* (
     };
   });
 
-  const resolveBindingUpstream = Effect.fn(function* ({
-    node,
-  }: {
-    node: BindNode;
-    resource: Resource;
-  }) {
-    const binding = node.binding as AnyBinding & {
-      // smuggled property (because it interacts poorly with inference)
-      Tag: ServiceMap.Service<never, BindingProvider>;
-    };
-    const provider = yield* binding.Tag;
-    const resourceId: string = node.binding.capability.resource.id;
-    const { upstreamAttr, upstreamNode } = yield* resolveUpstream(resourceId);
-
-    return {
-      resourceId,
-      upstreamAttr,
-      upstreamNode,
-      provider,
-    };
-  });
-
-  const attachBindings = ({
-    resource,
-    bindings,
-    target,
-  }: {
-    resource: Resource;
-    bindings: BindNode[];
-    target: {
-      id: string;
-      props: any;
-      attr: any;
-    };
-  }) =>
-    Effect.all(
-      bindings.map(
-        Effect.fn(function* (node) {
-          const { resourceId, upstreamAttr, upstreamNode, provider } =
-            yield* resolveBindingUpstream({ node, resource });
-
-          const input = {
-            source: {
-              id: resourceId,
-              attr: upstreamAttr,
-              props: upstreamNode.resource.props,
-            },
-            props: node.binding.props,
-            attr: node.attr,
-            target,
-          } as const;
-          if (node.action === "attach") {
-            return yield* asEffect(provider.attach(input));
-          } else if (node.action === "reattach") {
-            // reattach is optional, we fall back to attach if it's not available
-            return yield* asEffect(
-              (provider.reattach ? provider.reattach : provider.attach)(input),
-            );
-          } else if (node.action === "detach" && provider.detach) {
-            return yield* asEffect(
-              provider.detach({
-                ...input,
-                target,
-              }),
-            );
-          }
-          return node.attr;
-        }),
-      ),
-    );
-
-  const postAttachBindings = ({
-    bindings,
-    bindingOutputs,
-    resource,
-    target,
-  }: {
-    bindings: BindNode[];
-    bindingOutputs: any[];
-    resource: Resource;
-    target: {
-      id: string;
-      props: any;
-      attr: any;
-    };
-  }) =>
-    Effect.all(
-      bindings.map(
-        Effect.fn(function* (node, i) {
-          const { resourceId, upstreamAttr, upstreamNode, provider } =
-            yield* resolveBindingUpstream({ node, resource });
-
-          const oldBindingOutput = bindingOutputs[i];
-
-          if (
-            provider.postattach &&
-            (node.action === "attach" || node.action === "reattach")
-          ) {
-            const bindingOutput = yield* asEffect(
-              provider.postattach({
-                source: {
-                  id: resourceId,
-                  attr: upstreamAttr,
-                  props: upstreamNode.resource.props,
-                },
-                props: node.binding.props,
-                attr: oldBindingOutput,
-                target,
-              } as const),
-            );
-            return {
-              ...oldBindingOutput,
-              ...bindingOutput,
-            };
-          }
-          return oldBindingOutput;
-        }),
-      ),
-      { concurrency: "unbounded" },
-    );
-
   const apply: (node: Apply) => Effect.Effect<any, never, never> = (node) =>
     Effect.gen(function* () {
       const commit = <State extends ResourceState>(value: State) =>
         state.set({
           stack: stackName,
           stage: stage,
-          resourceId: node.resource.id,
+          logicalId: node.resource.id,
           value,
         });
 
       const id = node.resource.id;
-      const resource = node.resource;
 
       const scopedSession = {
         ...session,
@@ -348,6 +209,7 @@ const expandAndPivot = Effect.fnUntraced(function* (
                   props: news,
                   attr,
                   providerVersion: node.provider.version ?? 0,
+                  // wrong:
                   bindings: node.bindings,
                   downstream: node.downstream,
                 });
@@ -376,19 +238,12 @@ const expandAndPivot = Effect.fnUntraced(function* (
                 yield* checkpoint(attr);
               }
 
-              yield* report("attaching");
-
-              let bindingOutputs = yield* attachBindings({
-                resource,
-                bindings: node.bindings,
-                target: {
-                  id,
-                  props: news,
-                  attr,
-                },
-              });
-
               yield* report("creating");
+
+              const bindingOutputs = yield* Output.evaluate(
+                node.bindings,
+                upstream,
+              );
 
               attr = yield* node.provider.create({
                 id,
@@ -398,20 +253,6 @@ const expandAndPivot = Effect.fnUntraced(function* (
                 session: scopedSession,
               });
 
-              yield* checkpoint(attr);
-
-              yield* report("post-attach");
-              bindingOutputs = yield* postAttachBindings({
-                resource,
-                bindings: node.bindings,
-                bindingOutputs,
-                target: {
-                  id,
-                  props: news,
-                  attr,
-                },
-              });
-
               yield* commit<CreatedResourceState>({
                 status: "created",
                 logicalId: id,
@@ -419,10 +260,7 @@ const expandAndPivot = Effect.fnUntraced(function* (
                 resourceType: node.resource.type,
                 props: news,
                 attr,
-                bindings: node.bindings.map((binding, i) => ({
-                  ...binding,
-                  attr: bindingOutputs[i],
-                })),
+                bindings: bindingOutputs,
                 providerVersion: node.provider.version ?? 0,
                 downstream: node.downstream,
               });
@@ -447,21 +285,19 @@ const expandAndPivot = Effect.fnUntraced(function* (
                 upstream,
               )) as Record<string, any>;
 
-              const checkpoint = (attr: any) => {
-                if (node.state.status === "replaced") {
-                  return commit<ReplacedResourceState>({
+              yield* node.state.status === "replaced"
+                ? commit<ReplacedResourceState>({
                     ...node.state,
-                    attr,
+                    attr: node.state.attr,
                     props: news,
-                  });
-                } else {
-                  return commit<UpdatingReourceState>({
+                  })
+                : commit<UpdatingReourceState>({
                     status: "updating",
                     logicalId: id,
                     instanceId,
                     resourceType: node.resource.type,
                     props: news,
-                    attr,
+                    attr: node.state.attr,
                     providerVersion: node.provider.version ?? 0,
                     bindings: node.bindings,
                     downstream: node.downstream,
@@ -470,24 +306,13 @@ const expandAndPivot = Effect.fnUntraced(function* (
                         ? node.state.old
                         : node.state,
                   });
-                }
-              };
-
-              yield* checkpoint(node.state.attr);
-
-              yield* report("attaching");
-
-              let bindingOutputs = yield* attachBindings({
-                resource,
-                bindings: node.bindings,
-                target: {
-                  id,
-                  props: news,
-                  attr: node.state.attr,
-                },
-              });
 
               yield* report("updating");
+
+              const bindingOutputs = yield* Output.evaluate(
+                node.bindings,
+                upstream,
+              );
 
               const attr = yield* node.provider.update({
                 id,
@@ -502,21 +327,6 @@ const expandAndPivot = Effect.fnUntraced(function* (
                     ? node.state.props
                     : node.state.old.props,
                 output: node.state.attr,
-              });
-
-              yield* checkpoint(attr);
-
-              yield* report("post-attach");
-
-              bindingOutputs = yield* postAttachBindings({
-                resource,
-                bindings: node.bindings,
-                bindingOutputs,
-                target: {
-                  id,
-                  props: news,
-                  attr,
-                },
               });
 
               if (node.state.status === "replaced") {
@@ -559,6 +369,7 @@ const expandAndPivot = Effect.fnUntraced(function* (
                     instanceId,
                     resourceType: node.resource.type,
                     props: node.props,
+                    bindings: node.bindings,
                     attr: node.state.attr,
                     providerVersion: node.provider.version ?? 0,
                     deleteFirst: node.deleteFirst,
@@ -585,13 +396,14 @@ const expandAndPivot = Effect.fnUntraced(function* (
                 upstream,
               )) as Record<string, any>;
 
+              const bindings = yield* Output.evaluate(node.bindings, upstream);
+
               const checkpoint = <
                 S extends ReplacingResourceState | ReplacedResourceState,
               >({
                 status,
                 attr,
-                bindings,
-              }: Pick<S, "status" | "attr" | "bindings">) =>
+              }: Pick<S, "status" | "attr">) =>
                 commit<S>({
                   status,
                   logicalId: id,
@@ -600,7 +412,7 @@ const expandAndPivot = Effect.fnUntraced(function* (
                   props: news,
                   attr,
                   providerVersion: node.provider.version ?? 0,
-                  bindings: bindings ?? node.bindings,
+                  bindings,
                   downstream: node.downstream,
                   old: state.old,
                   deleteFirst: node.deleteFirst,
@@ -628,53 +440,19 @@ const expandAndPivot = Effect.fnUntraced(function* (
                 });
               }
 
-              yield* report("attaching");
-
-              let bindingOutputs = yield* attachBindings({
-                resource,
-                bindings: node.bindings,
-                target: {
-                  id,
-                  props: news,
-                  attr,
-                },
-              });
-
               yield* report("creating replacement");
 
               attr = yield* node.provider.create({
                 id,
                 news,
                 instanceId,
-                bindings: bindingOutputs,
+                bindings,
                 session: scopedSession,
-              });
-
-              yield* checkpoint({
-                status: "replacing",
-                attr,
-              });
-
-              yield* report("post-attach");
-
-              bindingOutputs = yield* postAttachBindings({
-                resource,
-                bindings: node.bindings,
-                bindingOutputs,
-                target: {
-                  id,
-                  props: news,
-                  attr,
-                },
               });
 
               yield* checkpoint<ReplacedResourceState>({
                 status: "replaced",
                 attr,
-                bindings: node.bindings.map((binding, i) => ({
-                  ...binding,
-                  attr: bindingOutputs[i],
-                })),
               });
 
               yield* report("created");
@@ -705,11 +483,12 @@ const expandAndPivot = Effect.fnUntraced(function* (
 });
 
 const collectGarbage = Effect.fnUntraced(function* (
-  plan: IPlan,
+  plan: Plan,
   session: PlanStatusSession,
 ) {
   const state = yield* State;
-  const stackName = yield* StackName;
+  const stack = yield* Stack;
+  const stackName = stack.name;
   const stage = yield* Stage;
 
   const deletions: {
@@ -730,12 +509,12 @@ const collectGarbage = Effect.fnUntraced(function* (
   };
 
   const deleteResource: (
-    node: Delete<Resource> | ReplacedResourceState,
+    node: Delete | ReplacedResourceState,
   ) => Effect.Effect<void, StateStoreError, never> = Effect.fnUntraced(
-    function* (node: Delete<Resource> | ReplacedResourceState) {
+    function* (node: Delete | ReplacedResourceState) {
       const isDeleteNode = (
-        node: Delete<Resource> | ReplacedResourceState,
-      ): node is Delete<Resource> => "action" in node;
+        node: Delete | ReplacedResourceState,
+      ): node is Delete => "action" in node;
 
       const {
         logicalId,
@@ -769,7 +548,7 @@ const collectGarbage = Effect.fnUntraced(function* (
         state.set({
           stack: stackName,
           stage: stage,
-          resourceId: logicalId,
+          logicalId: logicalId,
           value,
         });
 
@@ -796,7 +575,7 @@ const collectGarbage = Effect.fnUntraced(function* (
           yield* Effect.all(
             downstream.map((dep) =>
               dep in deletionGraph
-                ? deleteResource(deletionGraph[dep] as Delete<Resource>)
+                ? deleteResource(deletionGraph[dep] as Delete)
                 : Effect.void,
             ),
             { concurrency: "unbounded" },
@@ -834,7 +613,7 @@ const collectGarbage = Effect.fnUntraced(function* (
             yield* state.delete({
               stack: stackName,
               stage: stage,
-              resourceId: logicalId,
+              logicalId: logicalId,
             });
             yield* report("deleted");
           } else {

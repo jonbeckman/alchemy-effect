@@ -1,6 +1,6 @@
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import type { IPlan } from "../internal/plan.ts";
+import * as ServiceMap from "effect/ServiceMap";
+import type { Plan } from "../Plan.ts";
 import type { ApplyEvent } from "./CLIEvent.ts";
 
 export interface PlanStatusSession {
@@ -13,11 +13,11 @@ export interface ScopedPlanStatusSession extends PlanStatusSession {
 }
 
 export interface CLIService {
-  approvePlan: <P extends IPlan>(plan: P) => Effect.Effect<boolean>;
-  displayPlan: <P extends IPlan>(plan: P) => Effect.Effect<void>;
-  startApplySession: <P extends IPlan>(
+  approvePlan: <P extends Plan>(plan: P) => Effect.Effect<boolean>;
+  displayPlan: <P extends Plan>(plan: P) => Effect.Effect<void>;
+  startApplySession: <P extends Plan>(
     plan: P,
   ) => Effect.Effect<PlanStatusSession>;
 }
 
-export class CLI extends Context.Tag("CLIService")<CLI, CLIService>() {}
+export class CLI extends ServiceMap.Service<CLI, CLIService>()("CLI") {}

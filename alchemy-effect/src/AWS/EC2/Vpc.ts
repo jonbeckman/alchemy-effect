@@ -30,7 +30,7 @@ export interface VpcProps {
   /**
    * The ID of an IPv4 IPAM pool you want to use for allocating this VPC's CIDR.
    */
-  ipv4IpamPoolId?: Input<string>;
+  ipv4IpamPoolId?: string;
 
   /**
    * The netmask length of the IPv4 CIDR you want to allocate to this VPC from an IPAM pool.
@@ -40,7 +40,7 @@ export interface VpcProps {
   /**
    * The ID of an IPv6 IPAM pool which will be used to allocate this VPC an IPv6 CIDR.
    */
-  ipv6IpamPoolId?: Input<string>;
+  ipv6IpamPoolId?: string;
 
   /**
    * The netmask length of the IPv6 CIDR you want to allocate to this VPC from an IPAM pool.
@@ -55,12 +55,12 @@ export interface VpcProps {
   /**
    * The ID of an IPv6 address pool from which to allocate the IPv6 CIDR block.
    */
-  ipv6Pool?: Input<string>;
+  ipv6Pool?: string;
 
   /**
    * The Availability Zone or Local Zone Group name for the IPv6 CIDR block.
    */
-  ipv6CidrBlockNetworkBorderGroup?: Input<string>;
+  ipv6CidrBlockNetworkBorderGroup?: string;
 
   /**
    * The tenancy options for instances launched into the VPC.

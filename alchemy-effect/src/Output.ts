@@ -12,7 +12,9 @@ import { isPrimitive } from "./Util/data.ts";
 
 export const of = <R extends ResourceLike>(
   resource: Ref<R> | R,
-): Output<R["Attributes"], never> => {
+): R extends ResourceLike
+  ? ResourceExpr<R["Attributes"]>
+  : RefExpr<R["Attributes"]> => {
   if (isRef(resource)) {
     const metadata = getRefMetadata(resource);
     return new RefExpr(metadata.stack, metadata.stage, metadata.id) as any;
@@ -328,62 +330,67 @@ export class InvalidReferenceError extends Data.TaggedError(
   resourceId: string;
 }> {}
 
-export const evaluate: <A, Upstream extends ResourceLike, Req>(
-  expr: Output<A, Req>,
+export const evaluate: <A, Upstream extends ResourceLike, Req = never>(
+  expr: Output<A, Req> | A,
   upstream: {
     [Id in Upstream["LogicalId"]]: Extract<Upstream, { id: Id }>["Attributes"];
   },
 ) => Effect.Effect<
   A,
   InvalidReferenceError | MissingSourceError,
-  State.State
+  State.State | Req
 > = (expr, upstream) =>
   Effect.gen(function* () {
-    if (isResourceExpr(expr)) {
-      const srcId = expr.src.LogicalId;
-      const src = upstream[srcId as keyof typeof upstream];
-      if (!src) {
-        // type-safety should prevent this but let the caller decide how to handle it
-        return yield* Effect.fail(
-          new MissingSourceError({
-            message: `Source ${srcId} not found`,
-            srcId,
-          }),
+    if (isOutput(expr)) {
+      if (isResourceExpr(expr)) {
+        const srcId = expr.src.LogicalId;
+        const src = upstream[srcId as keyof typeof upstream];
+        if (!src) {
+          // type-safety should prevent this but let the caller decide how to handle it
+          return yield* Effect.fail(
+            new MissingSourceError({
+              message: `Source ${srcId} not found`,
+              srcId,
+            }),
+          );
+        }
+        return src;
+      } else if (isLiteralExpr(expr)) {
+        return expr.value;
+      } else if (isApplyExpr(expr)) {
+        return expr.f(yield* evaluate(expr.expr, upstream));
+      } else if (isEffectExpr(expr)) {
+        // TODO(sam): the same effect shoudl be memoized so that it's not run multiple times
+        return yield* expr.f(yield* evaluate(expr.expr, upstream));
+      } else if (isAllExpr(expr)) {
+        return yield* Effect.all(
+          expr.outs.map((out) => evaluate(out, upstream)),
         );
+      } else if (isPropExpr(expr)) {
+        return (yield* evaluate(expr.expr, upstream))?.[expr.identifier];
+      } else if (isRefExpr(expr)) {
+        const state = yield* State.State;
+        const stack = expr.stack ?? (yield* Stack).name;
+        const stage = expr.stage ?? (yield* Stage);
+        const resource = yield* state.get({
+          stack,
+          stage,
+          logicalId: expr.resourceId,
+        });
+        if (!resource) {
+          return yield* Effect.fail(
+            new InvalidReferenceError({
+              message: `Reference to '${expr.resourceId}' in stack '${stack}' and stage '${stage}' not found. Have you deployed '${stage}' or '${stack}'?`,
+              stack,
+              stage,
+              resourceId: expr.resourceId,
+            }),
+          );
+        }
+        return resource.attr;
       }
-      return src;
-    } else if (isLiteralExpr(expr)) {
-      return expr.value;
-    } else if (isApplyExpr(expr)) {
-      return expr.f(yield* evaluate(expr.expr, upstream));
-    } else if (isEffectExpr(expr)) {
-      // TODO(sam): the same effect shoudl be memoized so that it's not run multiple times
-      return yield* expr.f(yield* evaluate(expr.expr, upstream));
-    } else if (isAllExpr(expr)) {
-      return yield* Effect.all(expr.outs.map((out) => evaluate(out, upstream)));
-    } else if (isPropExpr(expr)) {
-      return (yield* evaluate(expr.expr, upstream))?.[expr.identifier];
-    } else if (isRefExpr(expr)) {
-      const state = yield* State.State;
-      const stack = expr.stack ?? (yield* Stack).name;
-      const stage = expr.stage ?? (yield* Stage);
-      const resource = yield* state.get({
-        stack,
-        stage,
-        resourceId: expr.resourceId,
-      });
-      if (!resource) {
-        return yield* Effect.fail(
-          new InvalidReferenceError({
-            message: `Reference to '${expr.resourceId}' in stack '${stack}' and stage '${stage}' not found. Have you deployed '${stage}' or '${stack}'?`,
-            stack,
-            stage,
-            resourceId: expr.resourceId,
-          }),
-        );
-      }
-      return resource.attr;
-    } else if (Array.isArray(expr)) {
+    }
+    if (Array.isArray(expr)) {
       return yield* Effect.all(expr.map((item) => evaluate(item, upstream)));
     } else if (typeof expr === "object" && expr !== null) {
       return Object.fromEntries(

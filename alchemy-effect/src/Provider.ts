@@ -18,6 +18,10 @@ export interface Provider<
   // ProviderService<R>
 > {}
 
+export const Provider = <R extends ResourceLike>(
+  type: R["Type"],
+): Provider<R> => ServiceMap.Service<Provider<R>, ProviderService<R>>()(type);
+
 type BindingData<Res extends ResourceLike> = [Res] extends [
   { binding: infer B },
 ]
@@ -61,13 +65,15 @@ export interface ProviderService<
   stables?: Extract<keyof Res["Attributes"], string>[];
   diff?(input: {
     id: string;
-    olds: Props<Res>;
     instanceId: string;
+    olds: Props<Res>;
     // Note: we do not resolve (Props<Res>) here because diff runs during plan
     // -> we need a way for the diff handlers to work with Outputs
     news: Res["Props"];
+    oldBindings: BindingData<Res>;
+    newBindings: Input<BindingData<Res>>;
     output: Res["Attributes"];
-  }): Effect.Effect<Diff | void, never, DiffReq>;
+  }): Effect.Effect<Diff | void, any, DiffReq>;
   precreate?(input: {
     id: string;
     news: Props<Res>;
@@ -100,11 +106,11 @@ export interface ProviderService<
   }): Effect.Effect<void, any, DeleteReq>;
 }
 
-export const getProviderByType = Effect.fnUntraced(function* (
-  resourceType: string,
-) {
+export const getProviderByType = Effect.fnUntraced(function* <
+  R extends ResourceLike,
+>(resourceType: string) {
   const context = yield* Effect.services<never>();
-  const provider: ProviderService = context.mapUnsafe.get(resourceType);
+  const provider: ProviderService<R> = context.mapUnsafe.get(resourceType);
   if (!provider) {
     return yield* Effect.die(
       new Error(`Provider not found for ${resourceType}`),

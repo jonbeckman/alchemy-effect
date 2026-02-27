@@ -2,7 +2,6 @@ import * as ec2 from "distilled-aws/ec2";
 import { Region } from "distilled-aws/Region";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
-import type { Input } from "../../Input.ts";
 import { createPhysicalName } from "../../PhysicalName.ts";
 import { Resource } from "../../Resource.ts";
 import { createInternalTags, createTagsList, diffTags } from "../../Tags.ts";
@@ -55,12 +54,12 @@ export interface SecurityGroupRuleData {
   /**
    * ID of a security group to allow traffic from/to.
    */
-  referencedGroupId?: Input<SecurityGroupId>;
+  referencedGroupId?: SecurityGroupId;
 
   /**
    * ID of a prefix list.
    */
-  prefixListId?: Input<string>;
+  prefixListId?: string;
 
   /**
    * Description for the rule.
@@ -72,7 +71,7 @@ export interface SecurityGroupProps {
   /**
    * The VPC to create the security group in.
    */
-  vpcId: Input<VpcId>;
+  vpcId: VpcId;
 
   /**
    * The name of the security group.
@@ -100,7 +99,7 @@ export interface SecurityGroupProps {
   /**
    * Tags to assign to the security group.
    */
-  tags?: Record<string, Input<string>>;
+  tags?: Record<string, string>;
 }
 
 export interface SecurityGroup extends Resource<

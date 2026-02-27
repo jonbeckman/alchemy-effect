@@ -1,7 +1,6 @@
 import * as ec2 from "distilled-aws/ec2";
 import * as Effect from "effect/Effect";
 
-import type { Input } from "../../Input.ts";
 import type { ProviderService } from "../../Provider.ts";
 import { Resource } from "../../Resource.ts";
 import type { NetworkAclId } from "./NetworkAcl.ts";
@@ -18,12 +17,12 @@ export interface NetworkAclAssociationProps {
   /**
    * The ID of the new network ACL to associate with the subnet.
    */
-  networkAclId: Input<NetworkAclId>;
+  networkAclId: NetworkAclId;
 
   /**
    * The ID of the subnet to associate with the network ACL.
    */
-  subnetId: Input<SubnetId>;
+  subnetId: SubnetId;
 }
 
 export interface NetworkAclAssociation extends Resource<

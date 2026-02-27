@@ -26,7 +26,7 @@ export type EventBusArn =
 
 export interface EventBusDeadLetterConfig {
   /** ARN of the SQS queue used as the dead-letter queue. */
-  Arn?: Input<EventBusArn>;
+  Arn?: EventBusArn;
 }
 
 export interface EventBusProps {
@@ -52,7 +52,7 @@ export interface EventBusProps {
    * The identifier of the KMS customer managed key for EventBridge to use
    * to encrypt events on this event bus.
    */
-  kmsKeyIdentifier?: Input<string>;
+  kmsKeyIdentifier?: string;
 
   /**
    * Dead-letter queue configuration for undeliverable events.

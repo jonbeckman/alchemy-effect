@@ -1,23 +1,23 @@
 import * as Effect from "effect/Effect";
-import type * as Layer from "effect/Layer";
+import * as Layer from "effect/Layer";
 import { pipeArguments, type Pipeable } from "effect/Pipeable";
 import { SingleShotGen } from "effect/Utils";
 import type { Input } from "./Input.ts";
 import type { InstanceId } from "./InstanceId.ts";
 import * as Output from "./Output.ts";
-import type { Provider, ProviderService } from "./Provider.ts";
+import { Provider, type ProviderService } from "./Provider.ts";
 import { Stack } from "./Stack.ts";
 
-export type ResourceCtor<R extends ResourceLike, Req = never> = (
+export type ResourceConstructor<R extends ResourceLike, Req = never> = (
   id: string,
-  props?: R["Props"],
+  props?: Input<R["Props"]>,
 ) => Effect.Effect<R, never, Req | Stack>;
 
-export type ResourceClass<Self extends ResourceLike> = ResourceCtor<
+export type ResourceClass<Self extends ResourceLike> = ResourceConstructor<
   Self,
   Provider<Self>
 > &
-  Effect.Effect<ResourceCtor<Self>> & {
+  Effect.Effect<ResourceConstructor<Self>> & {
     provider: ResourceProviders<Self>;
   };
 
@@ -28,7 +28,7 @@ export interface ResourceLike<
   Props extends object = any,
   Attributes extends object = any,
   Binding = any,
-> extends Pipeable {
+> {
   Type: Type;
   LogicalId: LogicalId;
   Props: Props;
@@ -36,6 +36,7 @@ export interface ResourceLike<
   Attributes: Attributes;
   /** @internal phantom */
   Binding: Binding;
+  Provider: Provider<this>;
 }
 
 export type Resource<
@@ -43,11 +44,12 @@ export type Resource<
   Props extends object = any,
   Attributes extends object = any,
   Binding = never,
-> = ResourceLike<Type, Props, Attributes, Binding> & {
-  bind(binding: Input<Binding>): Effect.Effect<void>;
-} & {
-  [attr in keyof Attributes]-?: Output.Output<Attributes[attr], never>;
-};
+> = Pipeable &
+  ResourceLike<Type, Props, Attributes, Binding> & {
+    bind(binding: Input<Binding>): Effect.Effect<void>;
+  } & {
+    [attr in keyof Attributes]-?: Output.Output<Attributes[attr], never>;
+  };
 
 export const Resource = <R extends ResourceLike>(
   type: R["Type"],
@@ -64,30 +66,27 @@ export const Resource = <R extends ResourceLike>(
       return yield* Effect.die(new Error(`Resource ${id} already exists`));
     }
 
-    const Resource = (stack.resources[id] = new Proxy(
+    const Resource: R = (stack.resources[id] = new Proxy(
       {
         Type: type,
         LogicalId: id,
         Props: props,
+        Provider: ProviderTag,
         // Attributes: undefined!,
         // Binding: undefined!,
-        bind() {},
+        bind: (data: any) => (stack.bindings[id] ??= []).push(data),
       } as any,
       {
-        get: (target, prop) => {
-          if (prop in target) {
-            return target[prop as keyof typeof target];
-          }
-          const resourceExpr = Output.of(Resource as R) as Output.ResourceExpr<
-            R["Attributes"],
-            never
-          >;
-          return new Output.PropExpr(resourceExpr, prop);
-        },
+        get: (target, prop) =>
+          prop in target
+            ? target[prop as keyof typeof target]
+            : new Output.PropExpr(Output.of(Resource), prop),
       },
     )) as R;
     return Resource;
   });
+
+  const ProviderTag = Provider(type);
 
   const Service = {
     [Symbol.iterator]() {
@@ -102,6 +101,11 @@ export const Resource = <R extends ResourceLike>(
         (services) => (id: string, props: R["Props"]) =>
           constructor(id, props).pipe(Effect.provide(services)),
       );
+    },
+    provider: {
+      tag: ProviderTag,
+      effect: Layer.effect(ProviderTag),
+      succeed: Layer.succeed(ProviderTag),
     },
   };
 

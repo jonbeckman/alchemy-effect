@@ -5,7 +5,6 @@ import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 
 import type { ScopedPlanStatusSession } from "../../Cli/CLI.ts";
-import type { Input } from "../../Input.ts";
 import { Resource } from "../../Resource.ts";
 import {
   createAlchemyTagFilters,
@@ -32,13 +31,13 @@ export interface NatGatewayProps {
    * The subnet in which to create the NAT gateway.
    * For public NAT gateways, this must be a public subnet.
    */
-  subnetId: Input<SubnetId>;
+  subnetId: SubnetId;
 
   /**
    * The allocation ID of the Elastic IP address for the gateway.
    * Required for public NAT gateways.
    */
-  allocationId?: Input<AllocationId>;
+  allocationId?: AllocationId;
 
   /**
    * Indicates whether the NAT gateway supports public or private connectivity.
@@ -56,7 +55,7 @@ export interface NatGatewayProps {
    * Secondary allocation IDs for additional private IP addresses.
    * Only valid for private NAT gateways.
    */
-  secondaryAllocationIds?: Input<AllocationId>[];
+  secondaryAllocationIds?: AllocationId[];
 
   /**
    * Secondary private IPv4 addresses.
@@ -73,7 +72,7 @@ export interface NatGatewayProps {
   /**
    * Tags to assign to the NAT gateway.
    */
-  tags?: Record<string, Input<string>>;
+  tags?: Record<string, string>;
 }
 
 export interface NatGateway extends Resource<

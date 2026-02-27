@@ -1,5 +1,4 @@
 import type * as lambda from "distilled-aws/lambda";
-import type { Input } from "../../Input.ts";
 import { Resource, type ResourceEffect } from "../../Resource.ts";
 
 export type { FunctionUrlAuthType } from "distilled-aws/lambda";
@@ -14,14 +13,14 @@ export interface PermissionProps {
   /**
    * The name or ARN of the Lambda function, version, or alias.
    */
-  functionName: Input<string>;
+  functionName: string;
 
   /**
    * The AWS service, AWS account, IAM user, or IAM role that invokes the function.
    * If you specify a service, use `sourceArn` or `sourceAccount` to limit who can
    * invoke the function through that service.
    */
-  principal: Input<string>;
+  principal: string;
 
   /**
    * For Alexa Smart Home functions, a token that the invoker must supply.
@@ -45,19 +44,19 @@ export interface PermissionProps {
    * The identifier for your organization in AWS Organizations.
    * Use this to grant permissions to all the AWS accounts under this organization.
    */
-  principalOrgID?: Input<string>;
+  principalOrgID?: string;
 
   /**
    * For AWS services, the ID of the AWS account that owns the resource.
    * Use this together with `sourceArn` to ensure that the specified account owns the resource.
    */
-  sourceAccount?: Input<string>;
+  sourceAccount?: string;
 
   /**
    * For AWS services, the ARN of the AWS resource that invokes the function.
    * For example, an Amazon S3 bucket or Amazon SNS topic.
    */
-  sourceArn?: Input<string>;
+  sourceArn?: string;
 }
 
 export interface PermissionAttrs {

@@ -1,7 +1,6 @@
 import * as ec2 from "distilled-aws/ec2";
 import * as Effect from "effect/Effect";
 
-import type { Input } from "../../Input.ts";
 import { Resource } from "../../Resource.ts";
 import { createInternalTags, createTagsList, diffTags } from "../../Tags.ts";
 import type { SecurityGroupId } from "./SecurityGroup.ts";
@@ -15,7 +14,7 @@ export interface SecurityGroupRuleProps {
   /**
    * The ID of the security group.
    */
-  groupId: Input<SecurityGroupId>;
+  groupId: SecurityGroupId;
 
   /**
    * Whether this is an ingress (inbound) or egress (outbound) rule.
@@ -53,12 +52,12 @@ export interface SecurityGroupRuleProps {
   /**
    * ID of a security group to allow traffic from/to.
    */
-  referencedGroupId?: Input<SecurityGroupId>;
+  referencedGroupId?: SecurityGroupId;
 
   /**
    * ID of a prefix list.
    */
-  prefixListId?: Input<string>;
+  prefixListId?: string;
 
   /**
    * Description for the rule.
@@ -68,7 +67,7 @@ export interface SecurityGroupRuleProps {
   /**
    * Tags to assign to the security group rule.
    */
-  tags?: Record<string, Input<string>>;
+  tags?: Record<string, string>;
 }
 
 export interface SecurityGroupRule extends Resource<

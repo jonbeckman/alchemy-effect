@@ -36,12 +36,12 @@ export const InMemoryService = (
     get: ({
       stack,
       stage,
-      resourceId,
+      logicalId,
     }: {
       stack: string;
       stage: string;
-      resourceId: string;
-    }) => Effect.succeed(state[stack]?.[stage]?.[resourceId]),
+      logicalId: string;
+    }) => Effect.succeed(state[stack]?.[stage]?.[logicalId]),
     getReplacedResources: ({
       stack,
       stage,
@@ -57,28 +57,28 @@ export const InMemoryService = (
     set: <V extends ResourceState>({
       stack,
       stage,
-      resourceId,
+      logicalId,
       value,
     }: {
       stack: string;
       stage: string;
-      resourceId: string;
+      logicalId: string;
       value: V;
     }) => {
       const stackState = (state[stack] ??= {});
       const stageState = (stackState[stage] ??= {});
-      stageState[resourceId] = value;
+      stageState[logicalId] = value;
       return Effect.succeed(value);
     },
     delete: ({
       stack,
       stage,
-      resourceId,
+      logicalId,
     }: {
       stack: string;
       stage: string;
-      resourceId: string;
-    }) => Effect.succeed(delete state[stack]?.[stage]?.[resourceId]),
+      logicalId: string;
+    }) => Effect.succeed(delete state[stack]?.[stage]?.[logicalId]),
     list: ({ stack, stage }: { stack: string; stage: string }) =>
       Effect.succeed(
         Array.from(Object.keys(state[stack]?.[stage] ?? {}) ?? []),

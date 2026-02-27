@@ -26,7 +26,7 @@ export interface EgressOnlyInternetGatewayProps {
   /**
    * The VPC for which to create the egress-only internet gateway.
    */
-  vpcId: Input<VpcId>;
+  vpcId: VpcId;
 
   /**
    * Tags to assign to the egress-only internet gateway.

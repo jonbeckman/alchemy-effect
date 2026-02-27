@@ -5,7 +5,6 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
-import type { Input } from "../../Input.ts";
 import { Resource } from "../../Resource.ts";
 import { createInternalTags, diffTags, hasTags } from "../../Tags.ts";
 import { Account } from "../Account.ts";
@@ -18,11 +17,11 @@ export interface EventSourceMappingProps {
   /**
    * The name or ARN of the Lambda function to invoke.
    */
-  functionName: Input<string>;
+  functionName: string;
   /**
    * The ARN of the event source (SQS queue, Kinesis stream, DynamoDB stream, etc.).
    */
-  eventSourceArn: Input<string>;
+  eventSourceArn: string;
   /**
    * The maximum number of records in each batch that Lambda pulls and sends to the function.
    *

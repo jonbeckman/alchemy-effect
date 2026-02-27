@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 
 import type { ScopedPlanStatusSession } from "../../Cli/CLI.ts";
-import type { Input } from "../../Input.ts";
 import { Resource } from "../../Resource.ts";
 import type { RouteTableId } from "./RouteTable.ts";
 import type { SubnetId } from "./Subnet.ts";
@@ -21,19 +20,19 @@ export interface RouteTableAssociationProps {
    * The ID of the route table.
    * Required.
    */
-  routeTableId: Input<RouteTableId>;
+  routeTableId: RouteTableId;
 
   /**
    * The ID of the subnet to associate with the route table.
    * Either subnetId or gatewayId is required, but not both.
    */
-  subnetId?: Input<SubnetId>;
+  subnetId?: SubnetId;
 
   /**
    * The ID of the gateway (internet gateway or virtual private gateway) to associate with the route table.
    * Either subnetId or gatewayId is required, but not both.
    */
-  gatewayId?: Input<string>;
+  gatewayId?: string;
 }
 
 export interface RouteTableAssociation extends Resource<

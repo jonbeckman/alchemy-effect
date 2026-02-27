@@ -3,7 +3,6 @@ import { Region } from "distilled-aws/Region";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 
-import type { Input } from "../../Input.ts";
 import { Resource } from "../../Resource.ts";
 import { createInternalTags, createTagsList, diffTags } from "../../Tags.ts";
 import type { AccountID } from "../Account.ts";
@@ -29,25 +28,25 @@ export interface EIPProps {
    * The ID of an address pool that you own.
    * Use this parameter to let Amazon EC2 select an address from the address pool.
    */
-  publicIpv4Pool?: Input<string>;
+  publicIpv4Pool?: string;
 
   /**
    * A unique set of Availability Zones, Local Zones, or Wavelength Zones
    * from which AWS advertises IP addresses.
    */
-  networkBorderGroup?: Input<string>;
+  networkBorderGroup?: string;
 
   /**
    * The ID of a customer-owned address pool.
    * Use this parameter to let Amazon EC2 select an address from the address pool.
    */
-  customerOwnedIpv4Pool?: Input<string>;
+  customerOwnedIpv4Pool?: string;
 
   /**
    * Tags to assign to the Elastic IP.
    * These will be merged with alchemy auto-tags.
    */
-  tags?: Record<string, Input<string>>;
+  tags?: Record<string, string>;
 }
 
 export interface EIP extends Resource<

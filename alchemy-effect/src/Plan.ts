@@ -2,15 +2,17 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ServiceMap from "effect/ServiceMap";
-import { omit } from "effect/Struct";
 import { asEffect } from ".//Util/types.ts";
 import type { NoopDiff, UpdateDiff } from "./Diff.ts";
 import { InstanceId } from "./InstanceId.ts";
 import * as Output from "./Output.ts";
-import type { Provider } from "./Provider.ts";
-import { getProviderByType, type ProviderService } from "./Provider.ts";
-import type { Resource, ResourceLike } from "./Resource.ts";
-import { StackName } from "./Stack.ts";
+import {
+  getProviderByType,
+  Provider,
+  type ProviderService,
+} from "./Provider.ts";
+import type { ResourceLike } from "./Resource.ts";
+import { Stack, StackName } from "./Stack.ts";
 import { Stage } from "./Stage.ts";
 import {
   State,
@@ -57,6 +59,7 @@ export interface BaseNode<R extends ResourceLike = ResourceLike> {
   resource: R;
   provider: ProviderService<R>;
   downstream: string[];
+  bindings: R["Binding"][];
 }
 
 export interface Create<
@@ -64,7 +67,6 @@ export interface Create<
 > extends BaseNode<R> {
   action: "create";
   props: R["Props"];
-  bindings: R["binding"][];
   state: CreatingResourceState | undefined;
 }
 
@@ -121,33 +123,14 @@ export type Plan = {
   };
 };
 
-export const plan = <const Resources extends Resource[]>(
+export const plan = <const Resources extends ResourceLike[]>(
   ..._resources: Resources
-): Plan =>
+) =>
   Effect.gen(function* () {
     const state = yield* State;
+    const stack = yield* Stack;
 
-    const findResources = (
-      resource: Resource,
-      visited: Set<string>,
-    ): Resource[] => {
-      if (visited.has(resource.LogicalId)) {
-        return [];
-      }
-      visited.add(resource.LogicalId);
-      const upstream = Object.values(Output.upstreamAny(resource.Props));
-      return [
-        resource,
-        ...upstream,
-        ...upstream.flatMap((r) => findResources(r, visited)),
-      ];
-    };
-    const resources = _resources
-      .flatMap((r) => findResources(r, new Set()))
-      .filter(
-        (r, i, arr) =>
-          arr.findIndex((r2) => r2.LogicalId === r.LogicalId) === i,
-      );
+    const resources = Object.values(stack.resources);
 
     // TODO(sam): rename terminology to Stack
     const stackName = yield* StackName;
@@ -159,7 +142,7 @@ export const plan = <const Resources extends Resource[]>(
     });
     const oldResources = yield* Effect.all(
       resourceIds.map((id) =>
-        state.get({ stack: stackName, stage: stage, resourceId: id }),
+        state.get({ stack: stackName, stage: stage, logicalId: id }),
       ),
       { concurrency: "unbounded" },
     );
@@ -187,19 +170,13 @@ export const plan = <const Resources extends Resource[]>(
         return yield* (resolvedResources[resourceExpr.src.LogicalId] ??=
           yield* Effect.cached(
             Effect.gen(function* () {
-              const resource = resourceExpr.src as Resource & {
-                provider: ServiceMap.ServiceClass<
-                  Provider,
-                  string,
-                  ProviderService
-                >;
-              };
-              const provider = yield* resource.provider;
+              const resource = resourceExpr.src;
+              const provider = yield* resource.Provider;
               const props = yield* resolveInput(resource.Props);
               const oldState = yield* state.get({
                 stack: stackName,
                 stage: stage,
-                resourceId: resource.LogicalId,
+                logicalId: resource.LogicalId,
               });
 
               if (!oldState || oldState.status === "creating") {
@@ -227,11 +204,12 @@ export const plan = <const Resources extends Resource[]>(
                       instanceId: oldState.instanceId,
                       news: props,
                       output: oldState.attr,
+                      oldBindings: oldState.bindings,
+                      // TODO(sam): reso
+                      newBindings: stack.bindings[resource.LogicalId] ?? [],
                     })
                     .pipe(
-                      Effect.provide(
-                        Layer.succeed(InstanceId, oldState.instanceId),
-                      ),
+                      Effect.provideService(InstanceId, oldState.instanceId),
                     )
                 : Effect.succeed(undefined);
 
@@ -339,9 +317,11 @@ export const plan = <const Resources extends Resource[]>(
           ...Object.values(Output.upstreamAny(resource.Props)).map(
             (r) => r.LogicalId,
           ),
-          ...(isService(resource)
-            ? resource.Props.bindings.capabilities.map((cap) => cap.resource.id)
-            : []),
+          // TODO(sam): are we sure we want bindings to be included as upstream dependencies?
+          // this kind of breaks their purpose of enabling circularity between resources
+          ...Object.values(
+            Output.upstreamAny(stack.bindings[resource.LogicalId] ?? []),
+          ).map((r) => r.LogicalId),
         ],
       ]),
     );
@@ -359,268 +339,251 @@ export const plan = <const Resources extends Resource[]>(
 
     const resourceGraph = Object.fromEntries(
       (yield* Effect.all(
-        resources
-          .flatMap((resource) => [
-            ...(isService(resource)
-              ? resource.Props.bindings.capabilities.map(
-                  (cap: Capability) => cap.resource as Resource,
-                )
-              : []),
-            ...Object.values(Output.upstreamAny(resource.Props)),
-            resource,
-          ])
-          .filter(
-            (node, i, arr) => arr.findIndex((n) => n.id === node.id) === i,
-          )
-          .map(
-            Effect.fn(function* (node) {
-              const id = node.id;
-              const resource = node as Resource & {
-                provider: ResourceTags<Resource<string, string, any, any>>;
-              };
-              const news = yield* resolveInput(resource.Props);
+        resources.map(
+          Effect.fn(function* (resource) {
+            const id = resource.LogicalId;
+            const news = yield* resolveInput(resource.Props);
+            const bindings = yield* resolveInput(stack.bindings[id] ?? []);
 
-              const oldState = yield* state.get({
-                stack: stackName,
-                stage: stage,
-                resourceId: id,
+            const oldState = yield* state.get({
+              stack: stackName,
+              stage: stage,
+              logicalId: id,
+            });
+            const provider = yield* resource.Provider;
+
+            const downstream = newDownstreamDependencies[id] ?? [];
+
+            const Node = <T extends Apply>(
+              node: Omit<
+                T,
+                "provider" | "resource" | "bindings" | "downstream"
+              >,
+            ) =>
+              ({
+                ...node,
+                provider,
+                resource,
+                bindings,
+                downstream,
+              }) as any as T;
+
+            // handle empty and intermediate (non-final) states:
+            if (oldState === undefined) {
+              return Node<Create>({
+                action: "create",
+                props: news,
+                state: oldState,
               });
-              const provider = yield* resource.provider.tag;
+            } else if (
+              oldState.status === "creating" &&
+              oldState.attr === undefined
+            ) {
+              if (provider.read) {
+                const attr = yield* provider
+                  .read({
+                    id,
+                    instanceId: oldState.instanceId,
+                    olds: oldState.props,
+                    output: oldState.attr,
+                    bindings,
+                  })
+                  .pipe(
+                    Effect.provide(
+                      Layer.succeed(InstanceId, oldState.instanceId),
+                    ),
+                  );
+                if (attr) {
+                  return Node<Create>({
+                    action: "create",
+                    props: news,
+                    state: { ...oldState, attr },
+                  });
+                }
+              }
+            }
 
-              const downstream = newDownstreamDependencies[id] ?? [];
+            // TODO(sam): is this correct for all possible states a resource can be in?
+            const oldProps = oldState.props;
 
-              const bindings = undefined!;
-
-              const Node = <T extends Apply>(
-                node: Omit<
-                  T,
-                  "provider" | "resource" | "bindings" | "downstream"
-                >,
-              ) =>
-                ({
-                  ...node,
-                  provider,
-                  resource,
-                  bindings,
-                  downstream,
-                }) as any as T;
-
-              // handle empty and intermediate (non-final) states:
-              if (oldState === undefined) {
-                return Node<Create<Resource>>({
-                  action: "create",
-                  props: news,
-                  state: oldState,
-                });
-              } else if (
-                oldState.status === "creating" &&
-                oldState.attr === undefined
-              ) {
-                if (provider.read) {
-                  const attr = yield* provider
-                    .read({
+            const diff = yield* asEffect(
+              provider.diff
+                ? provider
+                    .diff({
                       id,
+                      olds: oldProps,
                       instanceId: oldState.instanceId,
-                      olds: oldState.props,
                       output: oldState.attr,
-                      bindings,
+                      news,
+                      oldBindings: oldState.bindings ?? [],
+                      newBindings: bindings,
                     })
                     .pipe(
                       Effect.provide(
                         Layer.succeed(InstanceId, oldState.instanceId),
                       ),
-                    );
-                  if (attr) {
-                    return Node<Create<Resource>>({
-                      action: "create",
-                      props: news,
-                      state: { ...oldState, attr },
-                    });
-                  }
-                }
-              }
+                    )
+                : undefined,
+            ).pipe(
+              Effect.map(
+                (diff) =>
+                  diff ??
+                  ({
+                    action: arePropsChanged(oldProps, news) ? "update" : "noop",
+                  } as UpdateDiff | NoopDiff),
+              ),
+            );
 
-              // TODO(sam): is this correct for all possible states a resource can be in?
-              const oldProps = oldState.props;
-
-              const diff = yield* asEffect(
-                provider.diff
-                  ? provider
-                      .diff({
-                        id,
-                        olds: oldProps,
-                        instanceId: oldState.instanceId,
-                        output: oldState.attr,
-                        news,
-                      })
-                      .pipe(
-                        Effect.provide(
-                          Layer.succeed(InstanceId, oldState.instanceId),
-                        ),
-                      )
-                  : undefined,
-              ).pipe(
-                Effect.map(
-                  (diff) =>
-                    diff ??
-                    ({
-                      action: arePropsChanged(oldProps, news)
-                        ? "update"
-                        : "noop",
-                    } as UpdateDiff | NoopDiff),
-                ),
-              );
-
-              if (oldState.status === "creating") {
-                if (diff.action === "noop") {
-                  // we're in the creating state and props are un-changed
-                  // let's just continue where we left off
-                  return Node<Create<Resource>>({
-                    action: "create",
-                    props: news,
-                    state: oldState,
-                  });
-                } else if (diff.action === "update") {
-                  // props have changed in a way that is updatable
-                  // again, just continue with the create
-                  // TODO(sam): should we maybe try an update instead?
-                  return Node<Create<Resource>>({
-                    action: "create",
-                    props: news,
-                    state: oldState,
-                  });
-                } else {
-                  // props have changed in an incompatible way
-                  // because it's possible that an un-updatable resource has already been created
-                  // we must use a replace step to create a new one and delete the potential old one
-                  return Node<Replace<Resource>>({
-                    action: "replace",
-                    props: news,
-                    deleteFirst: diff.deleteFirst ?? false,
-                    state: oldState,
-                  });
-                }
-              } else if (oldState.status === "updating") {
-                // we started to update a resource but did not complete
-                if (diff.action === "update" || diff.action === "noop") {
-                  return Node<Update<Resource>>({
-                    action: "update",
-                    props: news,
-                    state: oldState,
-                  });
-                } else {
-                  // we started to update a resource but now believe we should replace it
-                  return Node<Replace<Resource>>({
-                    action: "replace",
-                    deleteFirst: diff.deleteFirst ?? false,
-                    props: news,
-                    // TODO(sam): can Apply handle replacements when the oldState is UpdatingResourceState?
-                    // -> or is there we do a provider.read to try and reconcile back to UpdatedResourceState?
-                    state: oldState,
-                  });
-                }
-              } else if (oldState.status === "replacing") {
-                // resource replacement started, but the replacement may or may not have been created
-                if (diff.action === "noop") {
-                  // this is the stable case - noop means just continue with the replacement
-                  return Node<Replace<Resource>>({
-                    action: "replace",
-                    deleteFirst: oldState.deleteFirst,
-                    props: news,
-                    state: oldState,
-                  });
-                } else if (diff.action === "update") {
-                  // potential problem here - the props have changed since we tried to replace,
-                  // but not enough to trigger another replacement. the resource provider should
-                  // be designed as idempotent to converge to the right state when creating the new resource
-                  // the newly generated instanceId is intended to assist with this
-                  return Node<Replace<Resource>>({
-                    action: "replace",
-                    deleteFirst: oldState.deleteFirst,
-                    props: news,
-                    state: oldState,
-                  });
-                } else {
-                  // ah shit, so we tried to replace the resource and then crashed
-                  // now the props have changed again in such a way that the (maybe, maybe not)
-                  // created resource should also be replaced
-
-                  // TODO(sam): what should we do?
-                  // 1. trigger a deletion of the potentially created resource
-                  // 2. expect the resource provider to handle it idempotently?
-                  // -> i don't think this case is fair to put on the resource provider
-                  //    because if the resource was created, it's in a state that can't be updated
-                  return yield* Effect.fail(
-                    new CannotReplacePartiallyReplacedResource(id),
-                  );
-                }
-              } else if (oldState.status === "replaced") {
-                // replacement has been created but we're not done cleaning up the old state
-                if (diff.action === "noop") {
-                  // this is the stable case - noop means just continue cleaning up the replacement
-                  return Node<Replace<Resource>>({
-                    action: "replace",
-                    deleteFirst: oldState.deleteFirst,
-                    props: news,
-                    state: oldState,
-                  });
-                } else if (diff.action === "update") {
-                  // the replacement has been created but now also needs to be updated
-                  // the resource provider should:
-                  // 1. Update the newly created replacement resource
-                  // 2. Then proceed as normal to delete the replaced resources (after all downstream references are updated)
-                  return Node<Update<Resource>>({
-                    action: "update",
-                    props: news,
-                    state: oldState,
-                  });
-                } else {
-                  // the replacement has been created but now it needs to be replaced
-                  // this is the worst-case scenario because downstream resources
-                  // could have been been updated to point to the replaced resources
-                  return yield* Effect.fail(
-                    new CannotReplacePartiallyReplacedResource(id),
-                  );
-                }
-              } else if (oldState.status === "deleting") {
-                if (diff.action === "noop" || diff.action === "update") {
-                  // we're in a partially deleted state, it is unclear whether it was or was not deleted
-                  // it should be safe to re-create it with the same instanceId?
-                  return Node<Create<Resource>>({
-                    action: "create",
-                    props: news,
-                    state: {
-                      ...oldState,
-                      status: "creating",
-                      props: news,
-                    },
-                  });
-                } else {
-                  return yield* Effect.fail(
-                    new CannotReplacePartiallyReplacedResource(id),
-                  );
-                }
+            if (oldState.status === "creating") {
+              if (diff.action === "noop") {
+                // we're in the creating state and props are un-changed
+                // let's just continue where we left off
+                return Node<Create>({
+                  action: "create",
+                  props: news,
+                  state: oldState,
+                });
               } else if (diff.action === "update") {
-                return Node<Update<Resource>>({
+                // props have changed in a way that is updatable
+                // again, just continue with the create
+                // TODO(sam): should we maybe try an update instead?
+                return Node<Create>({
+                  action: "create",
+                  props: news,
+                  state: oldState,
+                });
+              } else {
+                // props have changed in an incompatible way
+                // because it's possible that an un-updatable resource has already been created
+                // we must use a replace step to create a new one and delete the potential old one
+                return Node<Replace>({
+                  action: "replace",
+                  props: news,
+                  deleteFirst: diff.deleteFirst ?? false,
+                  state: oldState,
+                });
+              }
+            } else if (oldState.status === "updating") {
+              // we started to update a resource but did not complete
+              if (diff.action === "update" || diff.action === "noop") {
+                return Node<Update>({
                   action: "update",
                   props: news,
                   state: oldState,
                 });
-              } else if (diff.action === "replace") {
-                return Node<Replace<Resource>>({
-                  action: "replace",
-                  props: news,
-                  state: oldState,
-                  deleteFirst: diff?.deleteFirst ?? false,
-                });
               } else {
-                return Node<NoopUpdate<Resource>>({
-                  action: "noop",
+                // we started to update a resource but now believe we should replace it
+                return Node<Replace>({
+                  action: "replace",
+                  deleteFirst: diff.deleteFirst ?? false,
+                  props: news,
+                  // TODO(sam): can Apply handle replacements when the oldState is UpdatingResourceState?
+                  // -> or is there we do a provider.read to try and reconcile back to UpdatedResourceState?
                   state: oldState,
                 });
               }
-            }),
-          ),
+            } else if (oldState.status === "replacing") {
+              // resource replacement started, but the replacement may or may not have been created
+              if (diff.action === "noop") {
+                // this is the stable case - noop means just continue with the replacement
+                return Node<Replace>({
+                  action: "replace",
+                  deleteFirst: oldState.deleteFirst,
+                  props: news,
+                  state: oldState,
+                });
+              } else if (diff.action === "update") {
+                // potential problem here - the props have changed since we tried to replace,
+                // but not enough to trigger another replacement. the resource provider should
+                // be designed as idempotent to converge to the right state when creating the new resource
+                // the newly generated instanceId is intended to assist with this
+                return Node<Replace>({
+                  action: "replace",
+                  deleteFirst: oldState.deleteFirst,
+                  props: news,
+                  state: oldState,
+                });
+              } else {
+                // ah shit, so we tried to replace the resource and then crashed
+                // now the props have changed again in such a way that the (maybe, maybe not)
+                // created resource should also be replaced
+
+                // TODO(sam): what should we do?
+                // 1. trigger a deletion of the potentially created resource
+                // 2. expect the resource provider to handle it idempotently?
+                // -> i don't think this case is fair to put on the resource provider
+                //    because if the resource was created, it's in a state that can't be updated
+                return yield* Effect.fail(
+                  new CannotReplacePartiallyReplacedResource(id),
+                );
+              }
+            } else if (oldState.status === "replaced") {
+              // replacement has been created but we're not done cleaning up the old state
+              if (diff.action === "noop") {
+                // this is the stable case - noop means just continue cleaning up the replacement
+                return Node<Replace>({
+                  action: "replace",
+                  deleteFirst: oldState.deleteFirst,
+                  props: news,
+                  state: oldState,
+                });
+              } else if (diff.action === "update") {
+                // the replacement has been created but now also needs to be updated
+                // the resource provider should:
+                // 1. Update the newly created replacement resource
+                // 2. Then proceed as normal to delete the replaced resources (after all downstream references are updated)
+                return Node<Update>({
+                  action: "update",
+                  props: news,
+                  state: oldState,
+                });
+              } else {
+                // the replacement has been created but now it needs to be replaced
+                // this is the worst-case scenario because downstream resources
+                // could have been been updated to point to the replaced resources
+                return yield* Effect.fail(
+                  new CannotReplacePartiallyReplacedResource(id),
+                );
+              }
+            } else if (oldState.status === "deleting") {
+              if (diff.action === "noop" || diff.action === "update") {
+                // we're in a partially deleted state, it is unclear whether it was or was not deleted
+                // it should be safe to re-create it with the same instanceId?
+                return Node<Create>({
+                  action: "create",
+                  props: news,
+                  state: {
+                    ...oldState,
+                    status: "creating",
+                    props: news,
+                  },
+                });
+              } else {
+                return yield* Effect.fail(
+                  new CannotReplacePartiallyReplacedResource(id),
+                );
+              }
+            } else if (diff.action === "update") {
+              return Node<Update>({
+                action: "update",
+                props: news,
+                state: oldState,
+              });
+            } else if (diff.action === "replace") {
+              return Node<Replace>({
+                action: "replace",
+                props: news,
+                state: oldState,
+                deleteFirst: diff?.deleteFirst ?? false,
+              });
+            } else {
+              return Node<NoopUpdate>({
+                action: "noop",
+                state: oldState,
+              });
+            }
+          }),
+        ),
         { concurrency: "unbounded" },
       )).map((update) => [update.resource.LogicalId, update]),
     ) as Plan["resources"];
@@ -635,11 +598,12 @@ export const plan = <const Resources extends Resource[]>(
             const oldState = yield* state.get({
               stack: stackName,
               stage: stage,
-              resourceId: id,
+              logicalId: id,
             });
             let attr: any = oldState?.attr;
             if (oldState) {
-              const provider = yield* getProviderByType(oldState.resourceType);
+              const resourceType = oldState.resourceType;
+              const provider = yield* getProviderByType(resourceType);
               if (oldState.attr === undefined) {
                 if (provider.read) {
                   attr = yield* provider
@@ -662,18 +626,19 @@ export const plan = <const Resources extends Resource[]>(
                 {
                   action: "delete",
                   state: { ...oldState, attr },
-                  // // TODO(sam): Support Detach Bindings
-                  bindings: [],
-                  provider,
+                  provider: provider,
                   resource: {
                     LogicalId: id,
                     Type: oldState.resourceType,
-                    attr,
+                    Attributes: attr,
                     Props: oldState.props,
-                  } as Resource,
+                    Binding: undefined!,
+                    Provider: Provider(resourceType),
+                  } as ResourceLike,
                   // TODO(sam): is it enough to just pass through oldState?
                   downstream: oldDownstreamDependencies[id] ?? [],
-                } satisfies Delete<Resource>,
+                  bindings: oldState.bindings ?? [],
+                } satisfies Delete,
               ] as const;
             }
           }),
@@ -701,7 +666,7 @@ export const plan = <const Resources extends Resource[]>(
       resources: resourceGraph,
       deletions,
     } satisfies Plan;
-  }) as any;
+  });
 
 export class CannotReplacePartiallyReplacedResource extends Data.TaggedError(
   "CannotReplacePartiallyReplacedResource",
@@ -734,8 +699,8 @@ const arePropsChanged = <R extends ResourceLike>(
 ) => {
   return (
     Output.hasOutputs(newProps) ||
-    JSON.stringify(omit((oldProps ?? {}) as any, "bindings")) !==
-      JSON.stringify(omit((newProps ?? {}) as any, "bindings"))
+    // TODO(sam): sort keys and deep compare
+    JSON.stringify(oldProps ?? {}) !== JSON.stringify(newProps)
   );
 };
 

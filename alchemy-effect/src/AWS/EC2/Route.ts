@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 
 import { somePropsAreDifferent } from "../../Diff.ts";
-import type { Input } from "../../Input.ts";
 import { Resource } from "../../Resource.ts";
 import type { RouteTableId } from "./RouteTable.ts";
 
@@ -13,7 +12,7 @@ export interface RouteProps {
    * The ID of the route table where the route will be added.
    * Required.
    */
-  routeTableId: Input<RouteTableId>;
+  routeTableId: RouteTableId;
 
   /**
    * The IPv4 CIDR block used for the destination match.
@@ -40,60 +39,60 @@ export interface RouteProps {
   /**
    * The ID of an internet gateway or virtual private gateway.
    */
-  gatewayId?: Input<string>;
+  gatewayId?: string;
 
   /**
    * The ID of a NAT gateway.
    */
-  natGatewayId?: Input<string>;
+  natGatewayId?: string;
 
   /**
    * The ID of a NAT instance in your VPC.
    * This operation fails unless exactly one network interface is attached.
    */
-  instanceId?: Input<string>;
+  instanceId?: string;
 
   /**
    * The ID of a network interface.
    */
-  networkInterfaceId?: Input<string>;
+  networkInterfaceId?: string;
 
   /**
    * The ID of a VPC peering connection.
    */
-  vpcPeeringConnectionId?: Input<string>;
+  vpcPeeringConnectionId?: string;
 
   /**
    * The ID of a transit gateway.
    */
-  transitGatewayId?: Input<string>;
+  transitGatewayId?: string;
 
   /**
    * The ID of a local gateway.
    */
-  localGatewayId?: Input<string>;
+  localGatewayId?: string;
 
   /**
    * The ID of a carrier gateway.
    * Use for Wavelength Zones only.
    */
-  carrierGatewayId?: Input<string>;
+  carrierGatewayId?: string;
 
   /**
    * The ID of an egress-only internet gateway.
    * IPv6 traffic only.
    */
-  egressOnlyInternetGatewayId?: Input<string>;
+  egressOnlyInternetGatewayId?: string;
 
   /**
    * The Amazon Resource Name (ARN) of the core network.
    */
-  coreNetworkArn?: Input<string>;
+  coreNetworkArn?: string;
 
   /**
    * The ID of a VPC endpoint for Gateway Load Balancer.
    */
-  vpcEndpointId?: Input<string>;
+  vpcEndpointId?: string;
 }
 
 export interface Route extends Resource<

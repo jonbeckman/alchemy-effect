@@ -277,7 +277,7 @@ export interface {Resoruce}<
 > {}
 ```
 
-3. If a Resource includes IAM Policies, you should use the `PolicyDocument` type from the `../iam.ts` file. If used in Props, it should be wrapped in an `Input<T>` because it needs to refer to other resources' Output Attributes.
+3. If a Resource includes IAM Policies, you should use the `PolicyDocument` type from the `../iam.ts` file. 
 
 Example:
 
@@ -286,7 +286,7 @@ import type * as IAM from "../iam.ts";
 
 export interface {Resource}Props {
   // ...
-  policy: Input<IAM.PolicyDocument>;
+  policy: IAM.PolicyDocument;
 }
 ```
 
