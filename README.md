@@ -146,15 +146,42 @@ export default Effect.gen(function* () {
 );
 ```
 
-## HTTP APIs
 
-Serve an [Effect HttpApi](https://effect.website) directly from a Lambda Function.
+## Event Sources
+
+Subscribe to S3 notifications, SQS queues, and other event sources as Streams.
 
 ```typescript
+import * as Stream from "effect/Stream";
+
+yield* S3.notifications(bucket).subscribe((stream) =>
+  stream.pipe(
+    Stream.flatMap((item) =>
+      Stream.fromEffect(getJob(item.key)),
+    ),
+    Stream.tapSink(sink),
+    Stream.runDrain,
+  ),
+);
+```
+
+
+## HTTP APIs
+
+Serve an [Effect HttpApi](https://effect.website) directly from a Lambda Function. Define endpoints, implement handlers, build a Layer, and convert it to an Effect that `Http.serve` can register.
+
+```typescript
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
+import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
 
+// 1. Define endpoints
 const getJob = HttpApiEndpoint.get("getJob", "/", {
   success: Job,
   params: { jobId: JobId },
@@ -165,15 +192,37 @@ const createJob = HttpApiEndpoint.post("createJob", "/", {
   payload: Schema.Struct({ content: Schema.String }),
 });
 
-export const JobApi = HttpApi.make("JobApi").add(
+const JobApi = HttpApi.make("JobApi").add(
   HttpApiGroup.make("Jobs").add(getJob, createJob),
 );
+
+// 2. Implement handlers
+const JobApiHandlers = HttpApiBuilder.group(JobApi, "Jobs", (handlers) =>
+  handlers
+    .handle("getJob", Effect.fn(function* (req) {
+      const storage = yield* JobStorage;
+      return yield* storage.getJob(req.params.jobId);
+    }))
+    .handle("createJob", Effect.fn(function* (req) {
+      const storage = yield* JobStorage;
+      const job = yield* storage.putJob({ id: "TODO", content: req.payload.content });
+      return job.id;
+    })),
+);
+
+// 3. Build the API Layer and convert to an HttpEffect
+const JobApiLive = HttpApiBuilder.layer(JobApi).pipe(
+  Layer.provide(JobApiHandlers),
+  Layer.provide(HttpServer.layerServices),
+);
+
+export const JobHttpEffect = HttpRouter.toHttpEffect(JobApiLive);
 ```
 
-Then wire it into your Lambda:
+Then serve it inside your Lambda Function:
 
 ```typescript
-yield* Http.serve(yield* JobHttpEffect);
+yield* Http.serve(JobHttpEffect);
 ```
 
 ## RPC
@@ -193,24 +242,6 @@ export class JobRpcs extends RpcGroup.make(getJob, createJob) {}
 
 export const JobRpcHttpEffect = RpcServer.toHttpEffect(JobRpcs).pipe(
   Effect.provide(JobRpcsLive),
-);
-```
-
-## Event Sources
-
-Subscribe to S3 notifications, SQS queues, and other event sources as Streams.
-
-```typescript
-import * as Stream from "effect/Stream";
-
-yield* S3.notifications(bucket).subscribe((stream) =>
-  stream.pipe(
-    Stream.flatMap((item) =>
-      Stream.fromEffect(getJob(item.key)),
-    ),
-    Stream.tapSink(sink),
-    Stream.runDrain,
-  ),
 );
 ```
 
