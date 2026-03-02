@@ -1,6 +1,6 @@
 import * as AWS from "@/AWS";
 import { Bucket } from "@/AWS/S3";
-import { apply, destroy } from "@/index";
+import { destroy } from "@/Destroy";
 import { test } from "@/Test/Vitest";
 import { expect } from "@effect/vitest";
 import * as S3 from "distilled-aws/s3";
@@ -14,20 +14,22 @@ test(
     // Clean up any previous state
     yield* destroy();
 
-    class TestBucket extends Bucket("TestBucket", {
-      bucketName: "alchemy-test-bucket-crud",
-      tags: { Environment: "test" },
-      forceDestroy: true,
-    }) {}
-
-    const stack = yield* apply(TestBucket);
+    const bucket = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Bucket("TestBucket", {
+          bucketName: "alchemy-test-bucket-crud",
+          tags: { Environment: "test" },
+          forceDestroy: true,
+        });
+      }),
+    );
 
     // Verify the bucket was created
-    yield* S3.headBucket({ Bucket: stack.TestBucket.bucketName });
+    yield* S3.headBucket({ Bucket: bucket.bucketName });
 
     // Verify tags
     const tagging = yield* S3.getBucketTagging({
-      Bucket: stack.TestBucket.bucketName,
+      Bucket: bucket.bucketName,
     });
     expect(tagging.TagSet).toContainEqual({
       Key: "Environment",
@@ -35,17 +37,19 @@ test(
     });
 
     // Update the bucket tags
-    class UpdatedBucket extends Bucket("TestBucket", {
-      bucketName: "alchemy-test-bucket-crud",
-      tags: { Environment: "production", Team: "platform" },
-      forceDestroy: true,
-    }) {}
-
-    yield* apply(UpdatedBucket);
+    yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Bucket("TestBucket", {
+          bucketName: "alchemy-test-bucket-crud",
+          tags: { Environment: "production", Team: "platform" },
+          forceDestroy: true,
+        });
+      }),
+    );
 
     // Verify tags were updated
     const updatedTagging = yield* S3.getBucketTagging({
-      Bucket: stack.TestBucket.bucketName,
+      Bucket: bucket.bucketName,
     });
     expect(updatedTagging.TagSet).toContainEqual({
       Key: "Environment",
@@ -58,7 +62,7 @@ test(
 
     yield* destroy();
 
-    yield* assertBucketDeleted(stack.TestBucket.bucketName);
+    yield* assertBucketDeleted(bucket.bucketName);
   }).pipe(Effect.provide(AWS.providers())),
 );
 
@@ -68,26 +72,26 @@ test(
     // Clean up any previous state
     yield* destroy();
 
-    class CustomNameBucket extends Bucket("CustomNameBucket", {
-      bucketName: "alchemy-test-bucket-custom-name",
-      forceDestroy: true,
-    }) {}
-
-    const stack = yield* apply(CustomNameBucket);
-
-    expect(stack.CustomNameBucket.bucketName).toEqual(
-      "alchemy-test-bucket-custom-name",
+    const bucket = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Bucket("CustomNameBucket", {
+          bucketName: "alchemy-test-bucket-custom-name",
+          forceDestroy: true,
+        });
+      }),
     );
-    expect(stack.CustomNameBucket.bucketArn).toEqual(
+
+    expect(bucket.bucketName).toEqual("alchemy-test-bucket-custom-name");
+    expect(bucket.bucketArn).toEqual(
       "arn:aws:s3:::alchemy-test-bucket-custom-name",
     );
 
     // Verify the bucket exists
-    yield* S3.headBucket({ Bucket: stack.CustomNameBucket.bucketName });
+    yield* S3.headBucket({ Bucket: bucket.bucketName });
 
     yield* destroy();
 
-    yield* assertBucketDeleted(stack.CustomNameBucket.bucketName);
+    yield* assertBucketDeleted(bucket.bucketName);
   }).pipe(Effect.provide(AWS.providers())),
 );
 
@@ -97,30 +101,32 @@ test(
     // Clean up any previous state
     yield* destroy();
 
-    class ForceDestroyBucket extends Bucket("ForceDestroyBucket", {
-      bucketName: "alchemy-test-bucket-force-destroy",
-      forceDestroy: true,
-    }) {}
-
-    const stack = yield* apply(ForceDestroyBucket);
+    const bucket = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Bucket("ForceDestroyBucket", {
+          bucketName: "alchemy-test-bucket-force-destroy",
+          forceDestroy: true,
+        });
+      }),
+    );
 
     // Put an object in the bucket
     yield* S3.putObject({
-      Bucket: stack.ForceDestroyBucket.bucketName,
+      Bucket: bucket.bucketName,
       Key: "test-object.txt",
       Body: "Hello, World!",
     });
 
     // Verify the object exists
     yield* S3.headObject({
-      Bucket: stack.ForceDestroyBucket.bucketName,
+      Bucket: bucket.bucketName,
       Key: "test-object.txt",
     });
 
     // Destroy should succeed even with objects in the bucket
     yield* destroy();
 
-    yield* assertBucketDeleted(stack.ForceDestroyBucket.bucketName);
+    yield* assertBucketDeleted(bucket.bucketName);
   }).pipe(Effect.provide(AWS.providers())),
 );
 
@@ -130,18 +136,27 @@ test(
     // Clean up any previous state
     yield* destroy();
 
-    class IdempotentBucket extends Bucket("IdempotentBucket", {
-      bucketName: "alchemy-test-bucket-idempotent",
-      forceDestroy: true,
-    }) {}
-
     // First create
-    const stack1 = yield* apply(IdempotentBucket);
-    const bucketName = stack1.IdempotentBucket.bucketName;
+    const bucket1 = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Bucket("IdempotentBucket", {
+          bucketName: "alchemy-test-bucket-idempotent",
+          forceDestroy: true,
+        });
+      }),
+    );
+    const bucketName = bucket1.bucketName;
 
     // Second create (should be idempotent)
-    const stack2 = yield* apply(IdempotentBucket);
-    expect(stack2.IdempotentBucket.bucketName).toEqual(bucketName);
+    const bucket2 = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Bucket("IdempotentBucket", {
+          bucketName: "alchemy-test-bucket-idempotent",
+          forceDestroy: true,
+        });
+      }),
+    );
+    expect(bucket2.bucketName).toEqual(bucketName);
 
     yield* destroy();
 
@@ -155,17 +170,19 @@ test(
     // Clean up any previous state
     yield* destroy();
 
-    class ObjectLockBucket extends Bucket("ObjectLockBucket", {
-      bucketName: "alchemy-test-bucket-object-lock",
-      objectLockEnabled: true,
-      forceDestroy: true,
-    }) {}
-
-    const stack = yield* apply(ObjectLockBucket);
+    const bucket = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Bucket("ObjectLockBucket", {
+          bucketName: "alchemy-test-bucket-object-lock",
+          objectLockEnabled: true,
+          forceDestroy: true,
+        });
+      }),
+    );
 
     // Verify Object Lock is enabled
     const objectLockConfig = yield* S3.getObjectLockConfiguration({
-      Bucket: stack.ObjectLockBucket.bucketName,
+      Bucket: bucket.bucketName,
     });
     expect(objectLockConfig.ObjectLockConfiguration?.ObjectLockEnabled).toEqual(
       "Enabled",
@@ -173,7 +190,7 @@ test(
 
     yield* destroy();
 
-    yield* assertBucketDeleted(stack.ObjectLockBucket.bucketName);
+    yield* assertBucketDeleted(bucket.bucketName);
   }).pipe(Effect.provide(AWS.providers())),
 );
 
@@ -184,14 +201,16 @@ test(
     yield* destroy();
 
     // Create bucket with tags
-    class TaggedBucket extends Bucket("TagRemovalBucket", {
-      bucketName: "alchemy-test-bucket-tag-removal",
-      tags: { Environment: "test", Team: "platform" },
-      forceDestroy: true,
-    }) {}
-
-    const stack = yield* apply(TaggedBucket);
-    const bucketName = stack.TagRemovalBucket.bucketName;
+    const bucket = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Bucket("TagRemovalBucket", {
+          bucketName: "alchemy-test-bucket-tag-removal",
+          tags: { Environment: "test", Team: "platform" },
+          forceDestroy: true,
+        });
+      }),
+    );
+    const bucketName = bucket.bucketName;
 
     // Verify tags exist
     const tagging = yield* S3.getBucketTagging({
@@ -200,12 +219,14 @@ test(
     expect(tagging.TagSet).toHaveLength(2);
 
     // Update to remove all tags
-    class UntaggedBucket extends Bucket("TagRemovalBucket", {
-      bucketName: "alchemy-test-bucket-tag-removal",
-      forceDestroy: true,
-    }) {}
-
-    yield* apply(UntaggedBucket);
+    yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Bucket("TagRemovalBucket", {
+          bucketName: "alchemy-test-bucket-tag-removal",
+          forceDestroy: true,
+        });
+      }),
+    );
 
     // Verify all tags were removed (NoSuchTagSet error expected)
     const result = yield* S3.getBucketTagging({

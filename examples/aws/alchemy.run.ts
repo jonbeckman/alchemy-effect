@@ -50,6 +50,6 @@ export default Effect.gen(function* () {
     bucketArn: bucket.bucketArn,
   };
 }).pipe(
-  Effect.provide(Layer.provide(AWS.providers(), awsConfig)),
   Stack.make("JobStack"),
+  Effect.provide(Layer.provide(AWS.providers(), awsConfig)),
 );

@@ -1,7 +1,6 @@
-import * as AWS from "@/aws";
-import { Subnet, Vpc } from "@/aws/ec2";
-import { apply, destroy } from "@/index";
-import * as Output from "@/Output/Output";
+import * as AWS from "@/AWS";
+import { Subnet, Vpc } from "@/AWS/EC2";
+import { destroy } from "@/Destroy";
 import { test } from "@/Test/Vitest";
 import { expect } from "@effect/vitest";
 import * as EC2 from "distilled-aws/ec2";
@@ -20,46 +19,46 @@ test(
   Effect.gen(function* () {
     yield* destroy();
 
-    {
-      class TestVpc extends Vpc("TestVpc", {
-        cidrBlock: "10.0.0.0/16",
-      }) {}
+    const { vpc, subnet } = yield* test.deploy(
+      Effect.gen(function* () {
+        const vpc = yield* Vpc("TestVpc", {
+          cidrBlock: "10.0.0.0/16",
+        });
+        const subnet = yield* Subnet("TestSubnet", {
+          vpcId: vpc.vpcId,
+          cidrBlock: "10.0.1.0/24",
+        });
+        return { vpc, subnet };
+      }),
+    );
 
-      class TestSubnet extends Subnet("TestSubnet", {
-        vpcId: Output.of(TestVpc).vpcId,
-        cidrBlock: "10.0.1.0/24",
-      }) {}
+    const actualSubnet = yield* EC2.describeSubnets({
+      SubnetIds: [subnet.subnetId],
+    });
 
-      const stack = yield* apply(TestVpc, TestSubnet);
-
-      const actualSubnet = yield* EC2.describeSubnets({
-        SubnetIds: [stack.TestSubnet.subnetId],
-      });
-
-      expect(actualSubnet.Subnets?.[0]?.SubnetId).toEqual(
-        stack.TestSubnet.subnetId,
-      );
-      expect(actualSubnet.Subnets?.[0]?.CidrBlock).toEqual("10.0.1.0/24");
-      expect(actualSubnet.Subnets?.[0]?.VpcId).toEqual(stack.TestVpc.vpcId);
-      expect(actualSubnet.Subnets?.[0]?.State).toEqual("available");
-      expect(actualSubnet.Subnets?.[0]?.MapPublicIpOnLaunch).toEqual(false);
-    }
+    expect(actualSubnet.Subnets?.[0]?.SubnetId).toEqual(subnet.subnetId);
+    expect(actualSubnet.Subnets?.[0]?.CidrBlock).toEqual("10.0.1.0/24");
+    expect(actualSubnet.Subnets?.[0]?.VpcId).toEqual(vpc.vpcId);
+    expect(actualSubnet.Subnets?.[0]?.State).toEqual("available");
+    expect(actualSubnet.Subnets?.[0]?.MapPublicIpOnLaunch).toEqual(false);
 
     // Update subnet attributes
-    class TestVpc extends Vpc("TestVpc", {
-      cidrBlock: "10.0.0.0/16",
-    }) {}
-
-    class TestSubnet extends Subnet("TestSubnet", {
-      vpcId: Output.of(TestVpc).vpcId,
-      cidrBlock: "10.0.1.0/24",
-      mapPublicIpOnLaunch: true,
-    }) {}
-
-    const stack = yield* apply(TestVpc, TestSubnet);
+    const { subnet: updatedSubnet } = yield* test.deploy(
+      Effect.gen(function* () {
+        const vpc = yield* Vpc("TestVpc", {
+          cidrBlock: "10.0.0.0/16",
+        });
+        const subnet = yield* Subnet("TestSubnet", {
+          vpcId: vpc.vpcId,
+          cidrBlock: "10.0.1.0/24",
+          mapPublicIpOnLaunch: true,
+        });
+        return { vpc, subnet };
+      }),
+    );
 
     yield* expectSubnetAttribute({
-      SubnetId: stack.TestSubnet.subnetId,
+      SubnetId: updatedSubnet.subnetId,
       Attribute: "mapPublicIpOnLaunch",
       Value: true,
     });
@@ -67,7 +66,7 @@ test(
     // Delete subnet and VPC
     yield* destroy();
 
-    yield* assertSubnetDeleted(stack.TestSubnet.subnetId);
+    yield* assertSubnetDeleted(subnet.subnetId);
   }).pipe(Effect.provide(AWS.providers()), logLevel),
 );
 

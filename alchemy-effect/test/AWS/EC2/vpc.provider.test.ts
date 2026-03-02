@@ -1,6 +1,6 @@
-import * as AWS from "@/aws";
-import { Vpc } from "@/aws/ec2";
-import { apply, destroy } from "@/index";
+import * as AWS from "@/AWS";
+import { Vpc } from "@/AWS/EC2";
+import { destroy } from "@/Destroy";
 import { test } from "@/Test/Vitest";
 import { expect } from "@effect/vitest";
 import * as EC2 from "distilled-aws/ec2";
@@ -17,58 +17,61 @@ const logLevel = Effect.provideService(
 test(
   "create, update, delete vpc",
   Effect.gen(function* () {
-    {
-      class TestVpc extends Vpc("TestVpc", {
-        cidrBlock: "10.0.0.0/16",
-        enableDnsSupport: true,
-        enableDnsHostnames: true,
-      }) {}
+    const vpc = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Vpc("TestVpc", {
+          cidrBlock: "10.0.0.0/16",
+          enableDnsSupport: true,
+          enableDnsHostnames: true,
+        });
+      }),
+    );
 
-      const stack = yield* apply(TestVpc);
-
-      const actualVpc = yield* EC2.describeVpcs({
-        VpcIds: [stack.TestVpc.vpcId],
-      });
-      expect(actualVpc.Vpcs?.[0]?.VpcId).toEqual(stack.TestVpc.vpcId);
-      expect(actualVpc.Vpcs?.[0]?.CidrBlock).toEqual("10.0.0.0/16");
-      expect(actualVpc.Vpcs?.[0]?.State).toEqual("available");
-
-      yield* expectVpcAttribute({
-        VpcId: stack.TestVpc.vpcId,
-        Attribute: "enableDnsSupport",
-        Value: true,
-      });
-
-      yield* expectVpcAttribute({
-        VpcId: stack.TestVpc.vpcId,
-        Attribute: "enableDnsHostnames",
-        Value: true,
-      });
-    }
-
-    class TestVpc extends Vpc("TestVpc", {
-      cidrBlock: "10.0.0.0/16",
-      enableDnsSupport: false,
-      enableDnsHostnames: false,
-    }) {}
-
-    const stack = yield* apply(TestVpc);
+    const actualVpc = yield* EC2.describeVpcs({
+      VpcIds: [vpc.vpcId],
+    });
+    expect(actualVpc.Vpcs?.[0]?.VpcId).toEqual(vpc.vpcId);
+    expect(actualVpc.Vpcs?.[0]?.CidrBlock).toEqual("10.0.0.0/16");
+    expect(actualVpc.Vpcs?.[0]?.State).toEqual("available");
 
     yield* expectVpcAttribute({
-      VpcId: stack.TestVpc.vpcId,
+      VpcId: vpc.vpcId,
+      Attribute: "enableDnsSupport",
+      Value: true,
+    });
+
+    yield* expectVpcAttribute({
+      VpcId: vpc.vpcId,
+      Attribute: "enableDnsHostnames",
+      Value: true,
+    });
+
+    // Update VPC attributes
+    const updatedVpc = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Vpc("TestVpc", {
+          cidrBlock: "10.0.0.0/16",
+          enableDnsSupport: false,
+          enableDnsHostnames: false,
+        });
+      }),
+    );
+
+    yield* expectVpcAttribute({
+      VpcId: updatedVpc.vpcId,
       Attribute: "enableDnsSupport",
       Value: false,
     });
 
     yield* expectVpcAttribute({
-      VpcId: stack.TestVpc.vpcId,
+      VpcId: updatedVpc.vpcId,
       Attribute: "enableDnsHostnames",
       Value: false,
     });
 
     yield* destroy();
 
-    yield* assertVpcDeleted(stack.TestVpc.vpcId);
+    yield* assertVpcDeleted(vpc.vpcId);
   }).pipe(Effect.provide(AWS.providers()), logLevel),
 );
 

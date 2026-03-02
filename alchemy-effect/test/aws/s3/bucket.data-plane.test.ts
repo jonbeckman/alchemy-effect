@@ -1,6 +1,6 @@
-import * as AWS from "@/aws";
-import { Bucket } from "@/aws/s3";
-import { apply, destroy } from "@/index";
+import * as AWS from "@/AWS";
+import { Bucket } from "@/AWS/S3";
+import { destroy } from "@/Destroy";
 import { test } from "@/Test/Vitest";
 import { expect } from "@effect/vitest";
 import * as S3 from "distilled-aws/s3";
@@ -8,16 +8,20 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 
-// Test bucket with forceDestroy for easy cleanup
-class TestBucket extends Bucket("DataPlaneTestBucket", {
-  forceDestroy: true,
-}) {}
+const deployTestBucket = () =>
+  test.deploy(
+    Effect.gen(function* () {
+      return yield* Bucket("DataPlaneTestBucket", {
+        forceDestroy: true,
+      });
+    }),
+  );
 
 test(
   "listObjectsV2 - list objects in bucket",
   Effect.gen(function* () {
-    const stack = yield* apply(TestBucket);
-    const bucketName = stack.DataPlaneTestBucket.bucketName;
+    const bucket = yield* deployTestBucket();
+    const bucketName = bucket.bucketName;
 
     // Put some test objects
     yield* S3.putObject({
@@ -71,8 +75,8 @@ test(
 test(
   "headObject - get object metadata",
   Effect.gen(function* () {
-    const stack = yield* apply(TestBucket);
-    const bucketName = stack.DataPlaneTestBucket.bucketName;
+    const bucket = yield* deployTestBucket();
+    const bucketName = bucket.bucketName;
 
     // Put a test object
     yield* S3.putObject({
@@ -100,8 +104,8 @@ test(
 test(
   "headObject - returns error for non-existent object",
   Effect.gen(function* () {
-    const stack = yield* apply(TestBucket);
-    const bucketName = stack.DataPlaneTestBucket.bucketName;
+    const bucket = yield* deployTestBucket();
+    const bucketName = bucket.bucketName;
 
     // Try to head a non-existent object
     const result = yield* S3.headObject({
@@ -122,8 +126,8 @@ test(
 test(
   "copyObject - copy object within bucket",
   Effect.gen(function* () {
-    const stack = yield* apply(TestBucket);
-    const bucketName = stack.DataPlaneTestBucket.bucketName;
+    const bucket = yield* deployTestBucket();
+    const bucketName = bucket.bucketName;
 
     // Put source object
     yield* S3.putObject({
@@ -163,8 +167,8 @@ test(
 test(
   "copyObject - copy with metadata replacement",
   Effect.gen(function* () {
-    const stack = yield* apply(TestBucket);
-    const bucketName = stack.DataPlaneTestBucket.bucketName;
+    const bucket = yield* deployTestBucket();
+    const bucketName = bucket.bucketName;
 
     // Put source object
     yield* S3.putObject({
@@ -199,8 +203,8 @@ test(
 test(
   "multipart upload - complete workflow",
   Effect.gen(function* () {
-    const stack = yield* apply(TestBucket);
-    const bucketName = stack.DataPlaneTestBucket.bucketName;
+    const bucket = yield* deployTestBucket();
+    const bucketName = bucket.bucketName;
 
     // Create multipart upload
     const createResult = yield* S3.createMultipartUpload({
@@ -252,8 +256,8 @@ test(
 test(
   "multipart upload - abort",
   Effect.gen(function* () {
-    const stack = yield* apply(TestBucket);
-    const bucketName = stack.DataPlaneTestBucket.bucketName;
+    const bucket = yield* deployTestBucket();
+    const bucketName = bucket.bucketName;
 
     // Create multipart upload
     const createResult = yield* S3.createMultipartUpload({
@@ -299,8 +303,8 @@ test(
 test(
   "putObject and getObject - basic operations",
   Effect.gen(function* () {
-    const stack = yield* apply(TestBucket);
-    const bucketName = stack.DataPlaneTestBucket.bucketName;
+    const bucket = yield* deployTestBucket();
+    const bucketName = bucket.bucketName;
 
     // Test putObject
     yield* S3.putObject({
@@ -334,8 +338,8 @@ test(
 test(
   "deleteObject - remove object",
   Effect.gen(function* () {
-    const stack = yield* apply(TestBucket);
-    const bucketName = stack.DataPlaneTestBucket.bucketName;
+    const bucket = yield* deployTestBucket();
+    const bucketName = bucket.bucketName;
 
     // Put an object
     yield* S3.putObject({
@@ -372,7 +376,6 @@ test(
   }).pipe(Effect.provide(AWS.providers())),
 );
 
-// Helper to verify bucket deletion
 class BucketStillExists extends Data.TaggedError("BucketStillExists") {}
 
 const assertBucketDeleted = Effect.fn(function* (bucketName: string) {

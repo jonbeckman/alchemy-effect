@@ -1,7 +1,6 @@
-import { apply, destroy } from "@/index";
-
-import * as AWS from "@/aws";
-import { Table } from "@/aws/dynamodb";
+import * as AWS from "@/AWS";
+import { Table } from "@/AWS/DynamoDB";
+import { destroy } from "@/Destroy";
 import { test } from "@/Test/Vitest";
 import { expect } from "@effect/vitest";
 import * as DynamoDB from "distilled-aws/dynamodb";
@@ -12,22 +11,24 @@ import * as Schedule from "effect/Schedule";
 test(
   "create, update, delete table",
   Effect.gen(function* () {
-    class TestTable extends Table("TestTable", {
-      tableName: "test",
-      partitionKey: "id",
-      attributes: { id: "S" },
-    }) {}
-
-    const stack = yield* apply(TestTable);
+    const table = yield* test.deploy(
+      Effect.gen(function* () {
+        return yield* Table("TestTable", {
+          tableName: "test",
+          partitionKey: "id",
+          attributes: { id: "S" },
+        });
+      }),
+    );
 
     const actualTable = yield* DynamoDB.describeTable({
-      TableName: stack.TestTable.tableName,
+      TableName: table.tableName,
     });
-    expect(actualTable.Table?.TableArn).toEqual(stack.TestTable.tableArn);
+    expect(actualTable.Table?.TableArn).toEqual(table.tableArn);
 
     yield* destroy();
 
-    yield* assertTableIsDeleted(stack.TestTable.tableName);
+    yield* assertTableIsDeleted(table.tableName);
   }).pipe(Effect.provide(AWS.providers())),
 );
 
