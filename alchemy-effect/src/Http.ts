@@ -68,31 +68,41 @@ export const resolvePort = (options: { port?: number } | undefined) =>
     : Config.number("PORT").pipe(Config.withDefault(3000)).asEffect();
 
 export const BunHttpServer = () =>
-  Layer.succeed(HttpServer, {
-    serve: (handler, options) =>
-      Effect.gen(function* () {
-        const BunHttpServerPlatform = yield* Effect.promise(
-          () => import("@effect/platform-bun/BunHttpServer"),
-        );
-        const port = yield* resolvePort(options);
-        const server = yield* BunHttpServerPlatform.make({ port });
-        yield* server.serve(safeHttpEffect(handler));
-      }).pipe(Effect.orDie),
-  });
+  Layer.effect(
+    HttpServer,
+    Effect.gen(function* () {
+      const BunHttpServerPlatform = yield* Effect.promise(
+        () => import("@effect/platform-bun/BunHttpServer"),
+      );
+      return {
+        serve: (handler, options) =>
+          Effect.gen(function* () {
+            const port = yield* resolvePort(options);
+            const server = yield* BunHttpServerPlatform.make({ port });
+            yield* server.serve(safeHttpEffect(handler));
+          }).pipe(Effect.orDie),
+      };
+    }),
+  );
 
 export const NodeHttpServer = () =>
-  Layer.succeed(HttpServer, {
-    serve: (handler, options) =>
-      Effect.gen(function* () {
-        const NodeHttpServerPlatform = yield* Effect.promise(
-          () => import("@effect/platform-node/NodeHttpServer"),
-        );
-        const NodeHttp = yield* Effect.promise(() => import("node:http"));
-        const port = yield* resolvePort(options);
-        const server = yield* NodeHttpServerPlatform.make(
-          NodeHttp.createServer,
-          { port },
-        );
-        yield* server.serve(safeHttpEffect(handler));
-      }).pipe(Effect.orDie),
-  });
+  Layer.effect(
+    HttpServer,
+    Effect.gen(function* () {
+      const NodeHttpServerPlatform = yield* Effect.promise(
+        () => import("@effect/platform-node/NodeHttpServer"),
+      );
+      const NodeHttp = yield* Effect.promise(() => import("node:http"));
+      return {
+        serve: (handler, options) =>
+          Effect.gen(function* () {
+            const port = yield* resolvePort(options);
+            const server = yield* NodeHttpServerPlatform.make(
+              NodeHttp.createServer,
+              { port },
+            );
+            yield* server.serve(safeHttpEffect(handler));
+          }).pipe(Effect.orDie),
+      };
+    }),
+  );
