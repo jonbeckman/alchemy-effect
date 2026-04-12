@@ -746,12 +746,12 @@ ${
   runtime === "bun"
     ? `
 import { BunServices } from "@effect/platform-bun";
-import { BunHttpServer } from "alchemy-effect/HttpBun";
+import { BunHttpServer } from "alchemy-effect/Http";
 const HttpServer = BunHttpServer;
 `
     : `
 import { NodeServices } from "@effect/platform-node";
-import { NodeHttpServer } from "alchemy-effect/HttpNode";
+import { NodeHttpServer } from "alchemy-effect/Http";
 const HttpServer = NodeHttpServer;
 `
 }
@@ -1030,9 +1030,7 @@ await Effect.runPromise(serverEffect).catch((err) => {
                     existingName: existing?.name,
                   });
                   if (!recovery.canAdopt) {
-                    return yield* Effect.fail(
-                      new Error(recovery.message),
-                    );
+                    return yield* Effect.fail(new Error(recovery.message));
                   }
                   if (!existing) {
                     return yield* Effect.fail(
