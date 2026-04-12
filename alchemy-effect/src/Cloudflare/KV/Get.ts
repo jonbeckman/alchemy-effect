@@ -10,24 +10,28 @@ export class Get extends Binding.Service<
   Get,
   (
     namespace: KVNamespace,
-  ) => Effect.Effect<(key: string) => Effect.Effect<string | null>>
+  ) => Effect.Effect<
+    (key: string) => Effect.Effect<string | null, never, WorkerEnvironment>
+  >
 >()("Cloudflare.KV.Get") {}
 
 export const GetLive = Layer.effect(
   Get,
   Effect.gen(function* () {
     const Policy = yield* GetPolicy;
-    const env = yield* WorkerEnvironment;
 
     return Effect.fn(function* (namespace: KVNamespace) {
       yield* Policy(namespace);
-      const kvNamespace = (env as Record<string, runtime.KVNamespace>)[
-        namespace.LogicalId
-      ];
 
-      return Effect.fn(function* (key: string) {
-        return yield* Effect.promise(() => kvNamespace.get(key));
-      });
+      return (key: string) =>
+        WorkerEnvironment.asEffect().pipe(
+          Effect.flatMap((env) => {
+            const kvNamespace = (
+              env as Record<string, runtime.KVNamespace>
+            )[namespace.LogicalId];
+            return Effect.promise(() => kvNamespace.get(key));
+          }),
+        );
     });
   }),
 );

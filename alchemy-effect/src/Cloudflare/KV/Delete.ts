@@ -10,24 +10,28 @@ export class Delete extends Binding.Service<
   Delete,
   (
     namespace: KVNamespace,
-  ) => Effect.Effect<(key: string) => Effect.Effect<void>>
+  ) => Effect.Effect<
+    (key: string) => Effect.Effect<void, never, WorkerEnvironment>
+  >
 >()("Cloudflare.KV.Delete") {}
 
 export const DeleteLive = Layer.effect(
   Delete,
   Effect.gen(function* () {
     const Policy = yield* DeletePolicy;
-    const env = yield* WorkerEnvironment;
 
     return Effect.fn(function* (namespace: KVNamespace) {
       yield* Policy(namespace);
-      const kvNamespace = (env as Record<string, runtime.KVNamespace>)[
-        namespace.LogicalId
-      ];
 
-      return Effect.fn(function* (key: string) {
-        return yield* Effect.promise(() => kvNamespace.delete(key));
-      });
+      return (key: string) =>
+        WorkerEnvironment.asEffect().pipe(
+          Effect.flatMap((env) => {
+            const kvNamespace = (
+              env as Record<string, runtime.KVNamespace>
+            )[namespace.LogicalId];
+            return Effect.promise(() => kvNamespace.delete(key));
+          }),
+        );
     });
   }),
 );

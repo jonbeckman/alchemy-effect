@@ -17,7 +17,9 @@ export class GetWithMetadata extends Binding.Service<
       key: string,
       options?: GetWithMetadataOptions,
     ) => Effect.Effect<
-      runtime.KVNamespaceGetWithMetadataResult<string, Metadata>
+      runtime.KVNamespaceGetWithMetadataResult<string, Metadata>,
+      never,
+      WorkerEnvironment
     >
   >
 >()("Cloudflare.KV.GetWithMetadata") {}
@@ -26,20 +28,23 @@ export const GetWithMetadataLive = Layer.effect(
   GetWithMetadata,
   Effect.gen(function* () {
     const Policy = yield* GetWithMetadataPolicy;
-    const env = yield* WorkerEnvironment;
 
     return Effect.fn(function* (namespace: KVNamespace) {
       yield* Policy(namespace);
-      const kvNamespace = (env as Record<string, runtime.KVNamespace>)[
-        namespace.LogicalId
-      ];
 
       return <Metadata = unknown>(
         key: string,
         options?: GetWithMetadataOptions,
       ) =>
-        Effect.promise(() =>
-          kvNamespace.getWithMetadata<Metadata>(key, options),
+        WorkerEnvironment.asEffect().pipe(
+          Effect.flatMap((env) => {
+            const kvNamespace = (
+              env as Record<string, runtime.KVNamespace>
+            )[namespace.LogicalId];
+            return Effect.promise(() =>
+              kvNamespace.getWithMetadata<Metadata>(key, options),
+            );
+          }),
         );
     });
   }),

@@ -22,7 +22,11 @@ export class Put extends Binding.Service<
   (
     namespace: KVNamespace,
   ) => Effect.Effect<
-    (key: string, value: PutValue, options?: PutOptions) => Effect.Effect<void>
+    (
+      key: string,
+      value: PutValue,
+      options?: PutOptions,
+    ) => Effect.Effect<void, never, WorkerEnvironment>
   >
 >()("Cloudflare.KV.Put") {}
 
@@ -30,23 +34,21 @@ export const PutLive = Layer.effect(
   Put,
   Effect.gen(function* () {
     const Policy = yield* PutPolicy;
-    const env = yield* WorkerEnvironment;
 
     return Effect.fn(function* (namespace: KVNamespace) {
       yield* Policy(namespace);
-      const kvNamespace = (env as Record<string, runtime.KVNamespace>)[
-        namespace.LogicalId
-      ];
 
-      return Effect.fn(function* (
-        key: string,
-        value: PutValue,
-        options?: PutOptions,
-      ) {
-        return yield* Effect.promise(() =>
-          kvNamespace.put(key, replaceEffectStream(value), options),
+      return (key: string, value: PutValue, options?: PutOptions) =>
+        WorkerEnvironment.asEffect().pipe(
+          Effect.flatMap((env) => {
+            const kvNamespace = (
+              env as Record<string, runtime.KVNamespace>
+            )[namespace.LogicalId];
+            return Effect.promise(() =>
+              kvNamespace.put(key, replaceEffectStream(value), options),
+            );
+          }),
         );
-      });
     });
   }),
 );

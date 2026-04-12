@@ -15,7 +15,11 @@ export class List extends Binding.Service<
   ) => Effect.Effect<
     <Metadata = unknown>(
       options?: ListOptions,
-    ) => Effect.Effect<runtime.KVNamespaceListResult<Metadata, string>>
+    ) => Effect.Effect<
+      runtime.KVNamespaceListResult<Metadata, string>,
+      never,
+      WorkerEnvironment
+    >
   >
 >()("Cloudflare.KV.List") {}
 
@@ -23,16 +27,21 @@ export const ListLive = Layer.effect(
   List,
   Effect.gen(function* () {
     const Policy = yield* ListPolicy;
-    const env = yield* WorkerEnvironment;
 
     return Effect.fn(function* (namespace: KVNamespace) {
       yield* Policy(namespace);
-      const kvNamespace = (env as Record<string, runtime.KVNamespace>)[
-        namespace.LogicalId
-      ];
 
       return <Metadata = unknown>(options?: ListOptions) =>
-        Effect.promise(() => kvNamespace.list<Metadata>(options));
+        WorkerEnvironment.asEffect().pipe(
+          Effect.flatMap((env) => {
+            const kvNamespace = (
+              env as Record<string, runtime.KVNamespace>
+            )[namespace.LogicalId];
+            return Effect.promise(() =>
+              kvNamespace.list<Metadata>(options),
+            );
+          }),
+        );
     });
   }),
 );
