@@ -746,12 +746,12 @@ ${
   runtime === "bun"
     ? `
 import { BunServices } from "@effect/platform-bun";
-import { BunHttpServer } from "alchemy-effect/Http";
+import { BunHttpServer } from "alchemy-effect/HttpBun";
 const HttpServer = BunHttpServer;
 `
     : `
 import { NodeServices } from "@effect/platform-node";
-import { NodeHttpServer } from "alchemy-effect/Http";
+import { NodeHttpServer } from "alchemy-effect/HttpNode";
 const HttpServer = NodeHttpServer;
 `
 }
