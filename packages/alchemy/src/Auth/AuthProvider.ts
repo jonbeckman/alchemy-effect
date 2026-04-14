@@ -9,7 +9,7 @@ export interface AuthProvider<Config, Credentials> {
     isReconfigure: boolean,
   ): Effect.Effect<Config | "remove" | undefined>;
 
-  login(config: Config): Effect.Effect<void>;
+  login(profileName: string, config: Config): Effect.Effect<void>;
 
   logout(
     profileName: string,

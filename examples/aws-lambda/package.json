@@ -9,9 +9,9 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "deploy": "alchemy deploy",
     "dev": "alchemy dev",
-    "destroy": "alchemy destroy"
+    "deploy": "bun ../../alchemy-effect/bin/alchemy-effect.ts deploy",
+    "destroy": "bun ../../alchemy-effect/bin/alchemy-effect.ts destroy"
   },
   "dependencies": {
     "@distilled.cloud/aws": "catalog:",

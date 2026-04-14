@@ -125,6 +125,37 @@ const runSsoCommand = (
 
 const matchMethod = Match.discriminator("method");
 
+const printAwsProfileInfo = (awsProfile: string | undefined) =>
+  Effect.gen(function* () {
+    if (!awsProfile) {
+      const envRegion =
+        process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION;
+      if (envRegion) {
+        console.log(`  region: ${envRegion} (from env)`);
+      } else {
+        console.log("  region: (not set)");
+      }
+      return;
+    }
+    const result = yield* Effect.gen(function* () {
+      const auth = yield* DistilledAuth.Default;
+      return yield* auth.loadProfile(awsProfile);
+    }).pipe(
+      Effect.match({
+        onFailure: (err) => ({ error: String(err) }) as { error: string },
+        onSuccess: (profile) => profile,
+      }),
+    );
+    if ("error" in result) {
+      console.log(`  profile: ${awsProfile} (failed to load: ${result.error})`);
+      return;
+    }
+    console.log(`  profile: ${awsProfile}`);
+    if (result.region) console.log(`  region:  ${result.region}`);
+    if (result.sso_account_id)
+      console.log(`  account: ${result.sso_account_id}`);
+  });
+
 function printCredentials(creds: AwsResolvedCredentials): void {
   console.log(`  accessKeyId:     ${displayRedacted(creds.accessKeyId)}`);
   console.log(`  secretAccessKey: ${displayRedacted(creds.secretAccessKey)}`);
@@ -290,10 +321,24 @@ export const AwsAuthLive = Layer.effect(
           }),
         )),
 
-      login: (config) =>
+      login: (_profileName, config) =>
         Match.value(config).pipe(
           matchMethod("sso", (c) =>
             Effect.gen(function* () {
+              const stillValid = yield* provide(
+                DistilledAuth.loadProfileCredentials(c.ssoProfile).pipe(
+                  Effect.match({
+                    onFailure: () => false,
+                    onSuccess: () => true,
+                  }),
+                ),
+              );
+              if (stillValid) {
+                p.log.info(
+                  `AWS SSO: profile '${c.ssoProfile}' already has valid credentials.`,
+                );
+                return;
+              }
               p.log.info(
                 `AWS SSO: running 'aws sso login --profile ${c.ssoProfile}'...`,
               );
@@ -364,63 +409,70 @@ export const AwsAuthLive = Layer.effect(
 
       viewAuth: (profileName, config) =>
         provide(
-          Match.value(config).pipe(
-            matchMethod("env", () =>
-              Effect.sync(() => {
-                console.log("AWS: env");
-                const resolved = resolveFromEnv();
-                if (!resolved) {
-                  console.log("  AWS_ACCESS_KEY_ID:     (not set)");
-                  console.log("  AWS_SECRET_ACCESS_KEY: (not set)");
-                } else {
-                  printCredentials(resolved);
-                }
-              }),
-            ),
-            matchMethod("stored", () =>
-              Effect.gen(function* () {
-                console.log("AWS: stored");
-                const resolved = yield* resolveFromStored(profileName);
-                if (!resolved) {
-                  console.log(
-                    "  ERROR: credentials not found. Run: alchemy-effect login --configure",
+          Effect.gen(function* () {
+            yield* Match.value(config).pipe(
+              matchMethod("env", (c) =>
+                Effect.gen(function* () {
+                  console.log("AWS: env");
+                  const resolved = resolveFromEnv();
+                  if (!resolved) {
+                    console.log("  AWS_ACCESS_KEY_ID:     (not set)");
+                    console.log("  AWS_SECRET_ACCESS_KEY: (not set)");
+                  } else {
+                    printCredentials(resolved);
+                  }
+                  yield* printAwsProfileInfo(c.profile);
+                }),
+              ),
+              matchMethod("stored", (c) =>
+                Effect.gen(function* () {
+                  console.log("AWS: stored");
+                  const resolved = yield* resolveFromStored(profileName);
+                  if (!resolved) {
+                    console.log(
+                      "  ERROR: credentials not found. Run: alchemy-effect login --configure",
+                    );
+                  } else {
+                    printCredentials(resolved);
+                  }
+                  yield* printAwsProfileInfo(c.profile);
+                }),
+              ),
+              matchMethod("sso", (c) =>
+                Effect.gen(function* () {
+                  console.log(`AWS: sso (profile: ${c.ssoProfile})`);
+                  const ssoCredentials = yield* Effect.gen(function* () {
+                    const auth = yield* DistilledAuth.Default;
+                    const creds = yield* auth.loadProfileCredentials(
+                      c.ssoProfile,
+                    );
+                    return {
+                      accessKeyId: creds.accessKeyId,
+                      secretAccessKey: creds.secretAccessKey,
+                      sessionToken: creds.sessionToken,
+                      source: "~/.aws/sso/cache",
+                    } as AwsResolvedCredentials;
+                  }).pipe(
+                    Effect.catch((err: unknown) =>
+                      Effect.succeed({ error: String(err) } as {
+                        error: string;
+                      }),
+                    ),
                   );
-                } else {
-                  printCredentials(resolved);
-                }
-              }),
-            ),
-            matchMethod("sso", (c) =>
-              Effect.gen(function* () {
-                console.log(`AWS: sso (profile: ${c.ssoProfile})`);
-                const ssoCredentials = yield* Effect.gen(function* () {
-                  const auth = yield* DistilledAuth.Default;
-                  const creds = yield* auth.loadProfileCredentials(
-                    c.ssoProfile,
-                  );
-                  return {
-                    accessKeyId: creds.accessKeyId,
-                    secretAccessKey: creds.secretAccessKey,
-                    sessionToken: creds.sessionToken,
-                    source: "~/.aws/sso/cache",
-                  } as AwsResolvedCredentials;
-                }).pipe(
-                  Effect.catch((err: unknown) =>
-                    Effect.succeed({ error: String(err) } as { error: string }),
-                  ),
-                );
-                if ("error" in ssoCredentials) {
-                  console.log(`  ERROR: ${ssoCredentials.error}`);
-                  console.log(
-                    `  Run: aws sso login --profile ${c.ssoProfile}`,
-                  );
-                  return;
-                }
-                printCredentials(ssoCredentials);
-              }),
-            ),
-            Match.exhaustive,
-          ),
+                  if ("error" in ssoCredentials) {
+                    console.log(`  ERROR: ${ssoCredentials.error}`);
+                    console.log(
+                      `  Run: aws sso login --profile ${c.ssoProfile}`,
+                    );
+                  } else {
+                    printCredentials(ssoCredentials);
+                  }
+                  yield* printAwsProfileInfo(c.ssoProfile);
+                }),
+              ),
+              Match.exhaustive,
+            );
+          }),
         ),
 
       credentialsLayer: (profileName, config) =>

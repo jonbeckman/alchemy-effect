@@ -2,6 +2,7 @@ import * as p from "@clack/prompts";
 import * as cfAccounts from "@distilled.cloud/cloudflare/accounts";
 import * as CfCredentialsModule from "@distilled.cloud/cloudflare/Credentials";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -197,13 +198,14 @@ function printCredentials(creds: CloudflareResolvedCredentials): void {
     }),
     Match.when({ type: "oauth" }, (c) => {
       console.log(`  accessToken: ${displayRedacted(c.accessToken)}`);
-      const expiresIn = Math.max(
-        0,
-        Math.round((c.expires - Date.now()) / 1000),
-      );
-      console.log(
-        `  expires: ${expiresIn > 0 ? `in ${expiresIn}s` : "expired"}`,
-      );
+      const remainingMs = c.expires - Date.now();
+      const expiresAt = new Date(c.expires).toISOString();
+      if (remainingMs <= 0) {
+        console.log(`  expires: expired (${expiresAt})`);
+      } else {
+        const pretty = Duration.format(Duration.millis(remainingMs));
+        console.log(`  expires: in ${pretty} (${expiresAt})`);
+      }
     }),
     Match.exhaustive,
   );
@@ -262,14 +264,23 @@ export const CfAuthLive = Layer.effect(
           p.log.info(authorization.url);
 
           yield* Effect.gen(function* () {
-            const cmd =
+            // On Windows, use rundll32's FileProtocolHandler — a built-in
+            // shim that opens URLs in the default browser. It accepts the
+            // URL as a direct argument (no shell, no quoting of `&`).
+            // cmd.exe `start` would treat `&` in OAuth URLs as a command
+            // separator, and `explorer.exe` treats its arg as a path.
+            const [cmd, args] =
               process.platform === "win32"
-                ? "start"
+                ? [
+                    "rundll32.exe",
+                    ["url.dll,FileProtocolHandler", authorization.url],
+                  ]
                 : process.platform === "darwin"
-                  ? "open"
-                  : "xdg-open";
-            const args = process.platform === "win32" ? ["", authorization.url] : [authorization.url];
-            const handle = yield* ChildProcess.make(cmd, args, { shell: true });
+                  ? ["open", [authorization.url]]
+                  : ["xdg-open", [authorization.url]];
+            const handle = yield* ChildProcess.make(cmd, args, {
+              shell: false,
+            });
             yield* handle.exitCode;
           }).pipe(
             Effect.scoped,
@@ -307,29 +318,40 @@ export const CfAuthLive = Layer.effect(
         expiresAt: creds.expires,
       }),
       refresh: (current) =>
-        OAuthClient.refresh({
-          type: "oauth",
-          access: current.accessToken,
-          refresh: current.refreshToken ?? "",
-          expires: current.expiresAt ?? 0,
-          scopes: [],
-        }).pipe(
-          Effect.tap((refreshed) =>
-            writeCredentials(profileName, "cloudflare", refreshed).pipe(
-              Effect.catch(() => Effect.void),
+        Effect.gen(function* () {
+          if (!current.refreshToken) {
+            return yield* Effect.fail(
+              new OAuthClient.OAuthError({
+                error: "no_refresh_token",
+                errorDescription:
+                  "No Cloudflare OAuth refresh token available. Run: alchemy-effect login",
+              }),
+            );
+          }
+          const refreshed = yield* OAuthClient.refresh({
+            type: "oauth",
+            access: current.accessToken,
+            refresh: current.refreshToken,
+            expires: current.expiresAt ?? 0,
+            scopes: creds.scopes,
+          }).pipe(
+            Effect.mapError(
+              (err) =>
+                new OAuthClient.OAuthError({
+                  error: err.error,
+                  errorDescription: `${err.errorDescription} — Run: alchemy-effect login`,
+                }),
             ),
-          ),
-          Effect.map((refreshed) => ({
+          );
+          yield* writeCredentials(profileName, "cloudflare", refreshed).pipe(
+            Effect.catch(() => Effect.void),
+          );
+          return {
             accessToken: refreshed.access,
             refreshToken: refreshed.refresh,
             expiresAt: refreshed.expires,
-          })),
-          Effect.tapError(() =>
-            Effect.logWarning(
-              "Failed to refresh Cloudflare OAuth token. Run: alchemy-effect login",
-            ),
-          ),
-        ),
+          };
+        }),
     });
 
     const resolveFromStored = (
@@ -538,7 +560,7 @@ export const CfAuthLive = Layer.effect(
           }),
         )),
 
-      login: (config) =>
+      login: (profileName, config) =>
         Effect.orDie(provide(
           Match.value(config).pipe(
             matchMethod("env", () =>
@@ -559,7 +581,7 @@ export const CfAuthLive = Layer.effect(
               Effect.gen(function* () {
                 const creds =
                   yield* readCredentials<OAuthClient.OAuthCredentials>(
-                    "default",
+                    profileName,
                     "cloudflare",
                   );
                 if (
@@ -580,7 +602,7 @@ export const CfAuthLive = Layer.effect(
                   );
                   if (refreshed) {
                     yield* writeCredentials(
-                      "default",
+                      profileName,
                       "cloudflare",
                       refreshed,
                     );
@@ -590,7 +612,7 @@ export const CfAuthLive = Layer.effect(
                     return;
                   }
                 }
-                yield* oauthLogin("default", c.scopes);
+                yield* oauthLogin(profileName, c.scopes);
               }),
             ),
             Match.exhaustive,

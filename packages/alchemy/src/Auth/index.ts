@@ -2,11 +2,6 @@ import * as p from "@clack/prompts";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import type * as Path from "effect/Path";
-import type { PlatformError } from "effect/PlatformError";
-import type * as HttpClient from "effect/unstable/http/HttpClient";
-import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
-import type { AwsLoginError } from "./AWS/index.ts";
 import * as AWS from "./AWS/index.ts";
 import * as Cloudflare from "./Cloudflare/index.ts";
 import { type AlchemyProfile, getProfile, setProfile } from "./Config.ts";
@@ -29,6 +24,12 @@ export {
 } from "./Credentials.ts";
 export { AWS, Cloudflare };
 
+/**
+ * Combined layer that provides both AwsAuth and CfAuth services.
+ * Requires: FileSystem, Path, HttpClient, ChildProcessSpawner
+ */
+export const AuthLive = Layer.mergeAll(AWS.AwsAuthLive, Cloudflare.CfAuthLive);
+
 type ProviderKey = "aws" | "cloudflare";
 
 const PROVIDER_LABELS: Record<ProviderKey, string> = {
@@ -37,11 +38,6 @@ const PROVIDER_LABELS: Record<ProviderKey, string> = {
 };
 
 const ALL_PROVIDERS: ProviderKey[] = ["aws", "cloudflare"];
-
-export const providers = {
-  aws: AWS.provider,
-  cloudflare: Cloudflare.provider,
-} as const;
 
 function describeMethod(key: ProviderKey, profile: AlchemyProfile): string {
   const cfg = profile[key];
@@ -56,84 +52,99 @@ function describeMethod(key: ProviderKey, profile: AlchemyProfile): string {
   return cf.method;
 }
 
-export const layer = (profileName: string) =>
-  Layer.unwrap(
-    getProfile(profileName).pipe(
-      Effect.map((profile) => {
-        if (!profile) return Layer.empty;
-
-        const awsLayer = profile.aws
-          ? Layer.merge(
-              AWS.credentialsLayer(profileName, profile.aws),
-              AWS.stageConfigLayer(profile.aws),
-            )
-          : undefined;
-
-        const cfLayer = profile.cloudflare
-          ? Layer.merge(
-              Cloudflare.credentialsLayer(profileName, profile.cloudflare),
-              Cloudflare.stageConfigLayer(profile.cloudflare),
-            )
-          : undefined;
-
-        if (awsLayer && cfLayer) return Layer.merge(awsLayer, cfLayer);
-        if (awsLayer) return awsLayer;
-        if (cfLayer) return cfLayer;
-        return Layer.empty;
-      }),
-    ),
-  );
-
-type AllErrors =
-  | AwsLoginError
-  | Cloudflare.OAuthClient.OAuthError
-  | PlatformError;
-
-type AllRequirements =
-  | FileSystem.FileSystem
-  | ChildProcessSpawner
-  | Path.Path
-  | HttpClient.HttpClient;
-
 const configureProvider = (
   key: ProviderKey,
   profileName: string,
   isReconfigure: boolean,
 ): Effect.Effect<
   AWS.AwsAuthConfig | Cloudflare.CloudflareAuthConfig | "remove" | undefined,
-  AllErrors,
-  AllRequirements
-> => {
-  return providers[key].configure(profileName, isReconfigure);
-};
+  never,
+  AWS.AwsAuth | Cloudflare.CfAuth
+> =>
+  Effect.gen(function* () {
+    if (key === "aws") {
+      const aws = yield* AWS.AwsAuth;
+      return yield* aws.configure(profileName, isReconfigure);
+    }
+    const cf = yield* Cloudflare.CfAuth;
+    return yield* cf.configure(profileName, isReconfigure);
+  });
 
 const loginProvider = (
   key: ProviderKey,
+  profileName: string,
   config: AWS.AwsAuthConfig | Cloudflare.CloudflareAuthConfig,
-): Effect.Effect<void, AllErrors, AllRequirements> => {
-  if (key === "aws") return AWS.login(config as AWS.AwsAuthConfig);
-  return Cloudflare.login(config as Cloudflare.CloudflareAuthConfig);
-};
+): Effect.Effect<void, never, AuthRequirements> =>
+  Effect.gen(function* () {
+    if (key === "aws") {
+      const aws = yield* AWS.AwsAuth;
+      return yield* aws.login(profileName, config as AWS.AwsAuthConfig);
+    }
+    const cf = yield* Cloudflare.CfAuth;
+    return yield* cf.login(
+      profileName,
+      config as Cloudflare.CloudflareAuthConfig,
+    );
+  });
 
 const logoutProvider = (
   key: ProviderKey,
   profileName: string,
   config: AWS.AwsAuthConfig | Cloudflare.CloudflareAuthConfig,
-): Effect.Effect<void, never, AllRequirements> => {
-  if (key === "aws")
-    return AWS.logout(profileName, config as AWS.AwsAuthConfig);
-  return Cloudflare.logout(
-    profileName,
-    config as Cloudflare.CloudflareAuthConfig,
+): Effect.Effect<void, never, AuthRequirements> =>
+  Effect.gen(function* () {
+    if (key === "aws") {
+      const aws = yield* AWS.AwsAuth;
+      return yield* aws.logout(profileName, config as AWS.AwsAuthConfig);
+    }
+    const cf = yield* Cloudflare.CfAuth;
+    return yield* cf.logout(
+      profileName,
+      config as Cloudflare.CloudflareAuthConfig,
+    );
+  });
+
+type AuthRequirements =
+  | AWS.AwsAuth
+  | Cloudflare.CfAuth
+  | FileSystem.FileSystem;
+
+export const layer = (profileName: string) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const profile = yield* getProfile(profileName);
+      if (!profile) return Layer.empty;
+
+      const awsAuth = yield* AWS.AwsAuth;
+      const cfAuth = yield* Cloudflare.CfAuth;
+
+      const awsLayer = profile.aws
+        ? Layer.merge(
+            awsAuth.credentialsLayer(profileName, profile.aws),
+            AWS.stageConfigLayer(profile.aws),
+          )
+        : undefined;
+
+      const cfLayer = profile.cloudflare
+        ? Layer.merge(
+            cfAuth.credentialsLayer(profileName, profile.cloudflare),
+            Cloudflare.stageConfigLayer(profile.cloudflare),
+          )
+        : undefined;
+
+      if (awsLayer && cfLayer) return Layer.merge(awsLayer, cfLayer);
+      if (awsLayer) return awsLayer;
+      if (cfLayer) return cfLayer;
+      return Layer.empty;
+    }),
   );
-};
 
 export const configure = (
   profileName: string,
 ): Effect.Effect<
   boolean,
-  AllErrors,
-  AllRequirements
+  never,
+  AuthRequirements
 > =>
   Effect.gen(function* () {
     const existing = yield* getProfile(profileName);
@@ -151,8 +162,8 @@ const configureFirstTime = (
   profileName: string,
 ): Effect.Effect<
   boolean,
-  AllErrors,
-  AllRequirements
+  never,
+  AuthRequirements
 > =>
   Effect.gen(function* () {
     const selected = yield* Effect.promise(() =>
@@ -186,11 +197,11 @@ const configureFirstTime = (
       toLogin.push({ key, config: result as any });
     }
 
-    yield* setProfile(profileName, profile);
+    yield* Effect.orDie(setProfile(profileName, profile));
     p.log.success(`Profile "${profileName}" saved.`);
 
     for (const { key, config } of toLogin) {
-      yield* loginProvider(key, config);
+      yield* loginProvider(key, profileName, config);
     }
 
     p.outro("Done.");
@@ -202,8 +213,8 @@ const configureExisting = (
   existing: AlchemyProfile,
 ): Effect.Effect<
   boolean,
-  AllErrors,
-  AllRequirements
+  never,
+  AuthRequirements
 > =>
   Effect.gen(function* () {
     const enabled = ALL_PROVIDERS.filter((k) => existing[k]);
@@ -264,14 +275,25 @@ const configureExisting = (
         continue;
       }
 
-      if (wasConfigured && existing[key]) {
+      // Only logout the old config when the method changes. If the user
+      // reconfigured to the same method, configureProvider already wrote
+      // fresh credentials — logging out would revoke them.
+      const oldConfig = existing[key] as
+        | { method: string; credentialType?: string }
+        | undefined;
+      const newConfig = result as { method: string; credentialType?: string };
+      const methodChanged =
+        !!oldConfig &&
+        (oldConfig.method !== newConfig.method ||
+          oldConfig.credentialType !== newConfig.credentialType);
+      if (wasConfigured && existing[key] && methodChanged) {
         toLogout.push({ key, config: existing[key]! as any });
       }
       profile[key] = result as any;
       toLogin.push({ key, config: result as any });
     }
 
-    yield* setProfile(profileName, profile);
+    yield* Effect.orDie(setProfile(profileName, profile));
     p.log.success(`Profile "${profileName}" saved.`);
 
     for (const { key, config } of toLogout) {
@@ -279,7 +301,7 @@ const configureExisting = (
     }
 
     for (const { key, config } of toLogin) {
-      yield* loginProvider(key, config);
+      yield* loginProvider(key, profileName, config);
     }
 
     p.outro("Done.");
@@ -288,7 +310,7 @@ const configureExisting = (
 
 export const login = (
   profileName: string,
-): Effect.Effect<void, AllErrors, AllRequirements> =>
+): Effect.Effect<void, never, AuthRequirements> =>
   Effect.gen(function* () {
     const profile = yield* getProfile(profileName);
 
@@ -308,10 +330,12 @@ export const login = (
     }
 
     if (profile.aws) {
-      yield* AWS.login(profile.aws);
+      const aws = yield* AWS.AwsAuth;
+      yield* aws.login(profileName, profile.aws);
     }
     if (profile.cloudflare) {
-      yield* Cloudflare.login(profile.cloudflare);
+      const cf = yield* Cloudflare.CfAuth;
+      yield* cf.login(profileName, profile.cloudflare);
     }
 
     p.outro("Login complete.");
@@ -319,7 +343,7 @@ export const login = (
 
 export const logout = (
   profileName: string,
-): Effect.Effect<void, never, AllRequirements> =>
+): Effect.Effect<void, never, AuthRequirements> =>
   Effect.gen(function* () {
     const profile = yield* getProfile(profileName);
 
@@ -339,10 +363,12 @@ export const logout = (
     }
 
     if (profile.aws) {
-      yield* AWS.logout(profileName, profile.aws);
+      const aws = yield* AWS.AwsAuth;
+      yield* aws.logout(profileName, profile.aws);
     }
     if (profile.cloudflare) {
-      yield* Cloudflare.logout(profileName, profile.cloudflare);
+      const cf = yield* Cloudflare.CfAuth;
+      yield* cf.logout(profileName, profile.cloudflare);
     }
 
     p.outro("Logout complete.");
@@ -350,7 +376,7 @@ export const logout = (
 
 export const viewAuth = (
   profileName: string,
-): Effect.Effect<void, never, AllRequirements> =>
+): Effect.Effect<void, never, AuthRequirements> =>
   Effect.gen(function* () {
     const profile = yield* getProfile(profileName);
 
@@ -366,7 +392,8 @@ export const viewAuth = (
     if (!profile.aws) {
       console.log("AWS: not configured");
     } else {
-      yield* AWS.viewAuth(profileName, profile.aws);
+      const aws = yield* AWS.AwsAuth;
+      yield* aws.viewAuth(profileName, profile.aws);
     }
 
     console.log();
@@ -374,7 +401,8 @@ export const viewAuth = (
     if (!profile.cloudflare) {
       console.log("Cloudflare: not configured");
     } else {
-      yield* Cloudflare.viewAuth(profileName, profile.cloudflare);
+      const cf = yield* Cloudflare.CfAuth;
+      yield* cf.viewAuth(profileName, profile.cloudflare);
     }
 
     console.log();

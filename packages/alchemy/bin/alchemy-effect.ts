@@ -204,7 +204,10 @@ const execStack = Effect.fn(function* ({
   // TODO(sam): implement local and watch
   const platform = Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer);
 
-  const authLayer = Layer.provide(Auth.layer(profileName), platform);
+  const stackAuthLayer = Layer.provide(
+      Auth.layer(profileName),
+      Layer.provideMerge(Auth.AuthLive, platform),
+    );
 
   const rootLogger = Logger.layer([fileLogger("out")]);
 
@@ -254,7 +257,7 @@ const execStack = Effect.fn(function* ({
       // Effect.provide(Logger.layer([fileLogger("stacks", stack.name, stage)])),
     );
   }).pipe(
-    Effect.provide(authLayer),
+    Effect.provide(stackAuthLayer),
     Effect.provide(
       Layer.provideMerge(
         alchemy,
@@ -315,7 +318,10 @@ const tailCommand = Command.make(
     const configProvider = yield* loadConfigProvider(envFile);
 
     const platform = Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer);
-    const authLayer = Layer.provide(Auth.layer(profileName), platform);
+    const stackAuthLayer = Layer.provide(
+      Auth.layer(profileName),
+      Layer.provideMerge(Auth.AuthLive, platform),
+    );
 
     const rootLogger = Logger.layer([fileLogger("out")]);
 
@@ -409,7 +415,7 @@ const tailCommand = Command.make(
         }).pipe(Stream.runForEach((line) => Console.log(line)));
       }).pipe(Effect.provide(stack.services));
     }).pipe(
-      Effect.provide(authLayer),
+      Effect.provide(stackAuthLayer),
       Effect.provide(
         Layer.provideMerge(
           alchemy,
@@ -458,7 +464,10 @@ const bootstrapCommand = Command.make(
       ),
     );
 
-    const authLayer = Layer.provide(Auth.layer(profileName), platform);
+    const stackAuthLayer = Layer.provide(
+      Auth.layer(profileName),
+      Layer.provideMerge(Auth.AuthLive, platform),
+    );
 
     return yield* Effect.gen(function* () {
       const provider = yield* loadConfigProvider(envFile);
@@ -488,7 +497,7 @@ const bootstrapCommand = Command.make(
         Effect.provide(bootstrapLayer),
       );
     }).pipe(
-      Effect.provide(authLayer),
+      Effect.provide(stackAuthLayer),
       Effect.provide(platform),
     ) as Effect.Effect<void, any, never>;
   }),
@@ -605,7 +614,10 @@ const logsCommand = Command.make(
     const configProvider = yield* loadConfigProvider(envFile);
 
     const platform = Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer);
-    const authLayer = Layer.provide(Auth.layer(profileName), platform);
+    const stackAuthLayer = Layer.provide(
+      Auth.layer(profileName),
+      Layer.provideMerge(Auth.AuthLive, platform),
+    );
 
     const rootLogger = Logger.layer([fileLogger("out")]);
 
@@ -694,7 +706,7 @@ const logsCommand = Command.make(
         }
       }).pipe(Effect.provide(stack.services));
     }).pipe(
-      Effect.provide(authLayer),
+      Effect.provide(stackAuthLayer),
       Effect.provide(
         Layer.provideMerge(
           alchemy,
@@ -743,6 +755,11 @@ const parseSince = (value: string): Date => {
   return parsed;
 };
 
+const authServicesLayer = Layer.provide(
+  Auth.AuthLive,
+  Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer),
+);
+
 const loginCommand = Command.make(
   "login",
   {
@@ -750,11 +767,10 @@ const loginCommand = Command.make(
     configure,
   },
   Effect.fnUntraced(function* ({ profile, configure }) {
-    if (configure) {
-      yield* Auth.configure(profile);
-    } else {
-      yield* Auth.login(profile);
-    }
+    yield* (configure
+      ? Auth.configure(profile)
+      : Auth.login(profile)
+    ).pipe(Effect.provide(authServicesLayer));
   }),
 );
 
@@ -762,7 +778,7 @@ const logoutCommand = Command.make(
   "logout",
   { profile },
   Effect.fnUntraced(function* ({ profile }) {
-    yield* Auth.logout(profile);
+    yield* Auth.logout(profile).pipe(Effect.provide(authServicesLayer));
   }),
 );
 
@@ -770,7 +786,7 @@ const viewAuthCommand = Command.make(
   "view-auth",
   { profile },
   Effect.fnUntraced(function* ({ profile: profileName }) {
-    yield* Auth.viewAuth(profileName);
+    yield* Auth.viewAuth(profileName).pipe(Effect.provide(authServicesLayer));
   }),
 );
 
