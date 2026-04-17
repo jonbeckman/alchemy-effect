@@ -69,8 +69,8 @@ export const SecretsStoreProvider = () =>
           // No store exists yet — create one.
           const response = yield* createStore({
             accountId,
-            //Idk why it needs a name its a global and you never see it
-            body: [{ name: "secret-store" }],
+            //`default_secrets_store` is the name cloudflare uses to create a secret store
+            body: [{ name: "default_secrets_store" }],
           });
           const store = response.result[0]!;
           return {
