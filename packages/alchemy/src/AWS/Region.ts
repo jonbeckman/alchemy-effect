@@ -1,14 +1,10 @@
 import * as Region from "@distilled.cloud/aws/Region";
-import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { AWSEnvironment } from "./Environment.ts";
 
 export { Region } from "@distilled.cloud/aws/Region";
-
-export const AWS_REGION = Config.string("AWS_REGION");
-
-export type RegionID = string;
+export { AWS_REGION, type RegionID } from "./Environment.ts";
 
 export const of = (region: string) => Layer.succeed(Region.Region, region);
 

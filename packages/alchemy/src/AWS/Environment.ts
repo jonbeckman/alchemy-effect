@@ -11,13 +11,15 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { AWS_REGION, type RegionID } from "./Region.ts";
 
 export const AWS_PROFILE = Config.string("AWS_PROFILE").pipe(
   Config.withDefault("default"),
 );
 
+export const AWS_REGION = Config.string("AWS_REGION");
+
 export type AccountID = string;
+export type RegionID = string;
 
 export class FailedToGetAccount extends Data.TaggedError(
   "AWS::Environment::FailedToGetAccount",

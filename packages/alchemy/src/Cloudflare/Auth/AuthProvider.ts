@@ -175,27 +175,46 @@ const resolveCredentials = (
       ),
     ),
     Match.when({ method: "oauth" }, (cfg) =>
-      readCredentials<OAuthClient.OAuthCredentials>(
-        profileName,
-        "cf-oauth",
-      ).pipe(
-        Effect.flatMap((creds) =>
-          creds == null || creds.type !== "oauth"
-            ? Effect.fail(
-                new AuthError({
-                  message:
-                    "Cloudflare OAuth credentials not found. Run: alchemy login",
-                }),
-              )
-            : Effect.succeed({
-                type: "oauth" as const,
-                accessToken: Redacted.make(creds.access),
-                expires: creds.expires,
-                accountId: cfg.accountId,
-                source: { type: "oauth" as const },
-              }),
-        ),
-      ),
+      Effect.gen(function* () {
+        const creds = yield* readCredentials<OAuthClient.OAuthCredentials>(
+          profileName,
+          "cf-oauth",
+        );
+        if (creds == null || creds.type !== "oauth") {
+          return yield* Effect.fail(
+            new AuthError({
+              message:
+                "Cloudflare OAuth credentials not found. Run: alchemy login",
+            }),
+          );
+        }
+        // Refresh proactively if the token has expired (or is within
+        // 10s of expiring). Persist the refreshed creds so subsequent
+        // resolves don't repeat the round-trip.
+        const fresh =
+          creds.expires > Date.now() + 10_000
+            ? creds
+            : yield* OAuthClient.refresh(creds).pipe(
+                Effect.tap((refreshed) =>
+                  writeCredentials(profileName, "cf-oauth", refreshed),
+                ),
+                Effect.mapError(
+                  (e) =>
+                    new AuthError({
+                      message:
+                        "Cloudflare OAuth refresh failed. Run: alchemy login",
+                      cause: e,
+                    }),
+                ),
+              );
+        return {
+          type: "oauth" as const,
+          accessToken: Redacted.make(fresh.access),
+          expires: fresh.expires,
+          accountId: cfg.accountId,
+          source: { type: "oauth" as const },
+        };
+      }),
     ),
     Match.exhaustive,
   );
