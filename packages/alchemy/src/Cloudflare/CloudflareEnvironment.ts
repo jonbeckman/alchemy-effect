@@ -4,16 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { getAuthProvider } from "../Auth/AuthProvider.ts";
-import { loadOrConfigure } from "../Auth/Profile.ts";
+import { ALCHEMY_PROFILE, loadOrConfigure } from "../Auth/Profile.ts";
 import {
   CLOUDFLARE_AUTH_PROVIDER_NAME,
   type CloudflareAuthConfig,
   type CloudflareResolvedCredentials,
 } from "./Auth/AuthProvider.ts";
-
-const ALCHEMY_PROFILE = Config.string("ALCHEMY_PROFILE").pipe(
-  Config.withDefault("default"),
-);
 
 export class CloudflareEnvironment extends Context.Service<
   CloudflareEnvironment,

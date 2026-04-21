@@ -1,3 +1,5 @@
+import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -7,6 +9,15 @@ import type { AuthProvider, ConfigureContext } from "./AuthProvider.ts";
 
 export const rootDir = path.join(os.homedir(), ".alchemy");
 export const configFilePath = path.join(rootDir, "profiles.json");
+
+/**
+ * Config key consulted by the various `fromAuthProvider` /
+ * `fromEnvironment` layers to pick which named profile in
+ * `~/.alchemy/profiles.json` to use. Defaults to `"default"`.
+ */
+export const ALCHEMY_PROFILE = Config.string("ALCHEMY_PROFILE").pipe(
+  Config.withDefault("default"),
+);
 
 export const CONFIG_VERSION = 0;
 
@@ -79,6 +90,30 @@ export const setProfile = (name: string, profile: AlchemyProfile) =>
     ),
     Effect.flatMap(writeConfig),
   );
+
+/**
+ * Returns a `ConfigProvider` that overrides `ALCHEMY_PROFILE` with the
+ * given `profile` (when explicitly passed via the CLI `--profile` flag),
+ * falling through to `base` for everything else.
+ *
+ * Use this to let the CLI's `--profile <name>` win over `$ALCHEMY_PROFILE`
+ * without disturbing other config lookups.
+ */
+export const withProfileOverride = (
+  base: ConfigProvider.ConfigProvider,
+  profile: string | undefined,
+): ConfigProvider.ConfigProvider => {
+  if (profile === undefined) return base;
+  const overrides: Record<string, string> = { ALCHEMY_PROFILE: profile };
+  const overrideProvider = ConfigProvider.make((path) =>
+    Effect.succeed(
+      path.length === 1 && typeof path[0] === "string" && path[0] in overrides
+        ? ConfigProvider.makeValue(overrides[path[0]]!)
+        : undefined,
+    ),
+  );
+  return ConfigProvider.orElse(base)(overrideProvider);
+};
 
 /**
  * Load the stored config for the given AuthProvider in `profileName`.

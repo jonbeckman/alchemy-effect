@@ -19,7 +19,11 @@ import packageJson from "../package.json" with { type: "json" };
 import { apply } from "../src/Apply.ts";
 import { provideFreshArtifactStore } from "../src/Artifacts.ts";
 import { AuthError, AuthProviders } from "../src/Auth/AuthProvider.ts";
-import { getProfile, setProfile } from "../src/Auth/Profile.ts";
+import {
+  getProfile,
+  setProfile,
+  withProfileOverride,
+} from "../src/Auth/Profile.ts";
 import { PromptCancelled } from "../src/Util/Clank.ts";
 import {
   bootstrap as bootstrapAws,
@@ -252,7 +256,10 @@ const execStack = Effect.fn(function* ({
     );
   }
 
-  const configProvider = yield* resolveConfigProvider(envFile, profile);
+  const configProvider = withProfileOverride(
+    yield* loadConfigProvider(envFile),
+    profile,
+  );
 
   // Shared registry that AuthProviderLayer entries write themselves into when
   // the stack's providers Layer is built.
@@ -324,28 +331,6 @@ const execStack = Effect.fn(function* ({
   // Effect.Effect<void, any, Provider<never>>;
 });
 
-/**
- * Build the runtime ConfigProvider, optionally overriding `ALCHEMY_PROFILE`
- * with the value of the `--profile` flag when explicitly passed.
- */
-const resolveConfigProvider = Effect.fn(function* (
-  envFile: Option.Option<string>,
-  profile: string | undefined,
-) {
-  const base = yield* loadConfigProvider(envFile);
-  if (profile === undefined) return base;
-  // Flag wins over env: tiny provider for ALCHEMY_PROFILE only, falling
-  // through to the env-backed base for everything else.
-  const overrides: Record<string, string> = { ALCHEMY_PROFILE: profile };
-  const overrideProvider = ConfigProvider.make((path) =>
-    Effect.succeed(
-      path.length === 1 && typeof path[0] === "string" && path[0] in overrides
-        ? ConfigProvider.makeValue(overrides[path[0]]!)
-        : undefined,
-    ),
-  );
-  return ConfigProvider.orElse(base)(overrideProvider);
-});
 
 const resourceFilter = Flag.string("filter").pipe(
   Flag.withDescription(
@@ -661,7 +646,10 @@ const loginCommand = Command.make(
     const profile = profileArg ?? "default";
     const authProviders: AuthProviders["Service"] = {};
 
-    const configProvider = yield* resolveConfigProvider(envFile, profile);
+    const configProvider = withProfileOverride(
+      yield* loadConfigProvider(envFile),
+      profile,
+    );
 
     const platform = Layer.mergeAll(PlatformServices, FetchHttpClient.layer);
 
