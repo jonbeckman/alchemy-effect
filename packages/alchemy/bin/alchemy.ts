@@ -12,7 +12,9 @@ import * as S from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import * as CliError from "effect/unstable/cli/CliError";
+import type { FileSystem } from "effect/FileSystem";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import type { HttpClient } from "effect/unstable/http/HttpClient";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 
 import packageJson from "../package.json" with { type: "json" };
@@ -528,11 +530,17 @@ const bootstrapCommand = Command.make(
       }
 
       // Build a single AWSEnvironment, then derive Region/Credentials from
-      // it so resource providers downstream see a consistent view.
+      // it so resource providers downstream see a consistent view. The
+      // credentials Effect captures FileSystem/Path/HttpClient via the
+      // ambient context; AWSEnvironment expects R=never, so we provide it
+      // here.
+      const ambient = yield* Effect.context<FileSystem | Path | HttpClient>();
       const environment = AWSEnvironment.makeEnvironment({
         accountId: ssoProfile.sso_account_id,
         region: region ?? ssoProfile.region ?? "us-east-1",
-        credentials: Auth.loadProfileCredentials(profile),
+        credentials: Auth.loadProfileCredentials(profile).pipe(
+          Effect.provide(ambient),
+        ),
         profile,
       });
 
