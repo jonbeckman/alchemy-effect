@@ -31,6 +31,10 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 const CYCLE_MS = 6000;
+/** Longer dwell on the Layer tab so both impls (ddb / d1) get airtime. */
+const LAYER_CYCLE_MS = 9500;
+/** How long each Layer impl is shown before swapping to the other. */
+const LAYER_IMPL_SWAP_MS = 4000;
 
 const IAM_CODE = `export default AWS.Lambda.Function(
   "JobApi",
@@ -111,7 +115,7 @@ const WORKFLOW_CODE = `export default class Notifier extends Cloudflare.Workflow
   }),
 ) {}`;
 
-const LAYER_CODE = `export class JobStorage extends Context.Service<JobStorage, {
+const LAYER_DDB_CODE = `export class JobStorage extends Context.Service<JobStorage, {
   putJob: (job: Job) => Effect.Effect<Job, PutJobError>;
   getJob: (id: string) => Effect.Effect<Job | undefined, GetJobError>;
 }>()("JobStorage") {}
@@ -129,33 +133,60 @@ export const JobStorageDynamoDB = Layer.effect(
   }),
 );`;
 
-const CODE_BY_TAB: Record<Tab, string> = {
+const LAYER_D1_CODE = `export class JobStorage extends Context.Service<JobStorage, {
+  putJob: (job: Job) => Effect.Effect<Job, PutJobError>;
+  getJob: (id: string) => Effect.Effect<Job | undefined, GetJobError>;
+}>()("JobStorage") {}
+
+export const JobStorageD1 = Layer.effect(
+  JobStorage,
+  Effect.gen(function* () {
+    const db   = yield* Cloudflare.D1Database("JobsDB");
+    const conn = yield* Cloudflare.D1Connection.bind(db);
+    return JobStorage.of({
+      putJob: (job) => conn.exec(\`INSERT INTO jobs VALUES ('\${job.id}', '\${job.content}')\`),
+      getJob: (id)  => conn.exec(\`SELECT * FROM jobs WHERE id = '\${id}'\`),
+    });
+  }),
+);`;
+
+type LayerImpl = "ddb" | "d1";
+
+const LAYER_CODE_BY_IMPL: Record<LayerImpl, string> = {
+  ddb: LAYER_DDB_CODE,
+  d1: LAYER_D1_CODE,
+};
+
+const CODE_BY_TAB: Record<Exclude<Tab, "layer">, string> = {
   iam: IAM_CODE,
   stream: STREAM_CODE,
   do: DO_CODE,
   container: CONTAINER_CODE,
   workflow: WORKFLOW_CODE,
-  layer: LAYER_CODE,
 };
 
 export default function EffectPilledShowcase() {
   const [tab, setTab] = useState<Tab>("iam");
   const [pinned, setPinned] = useState(false);
+  const [layerImpl, setLayerImpl] = useState<LayerImpl>("ddb");
   const wrapRef = useRef<HTMLDivElement>(null);
 
+  // Tab auto-cycle. Dwell longer on the Layer tab so both impls show
+  // before moving on to the next tab.
   useEffect(() => {
     if (pinned) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const schedule = () => {
+      const dwell = tab === "layer" ? LAYER_CYCLE_MS : CYCLE_MS;
       timer = setTimeout(() => {
         if (cancelled) return;
         setTab((t) => {
           const idx = TABS.findIndex((x) => x.id === t);
           return TABS[(idx + 1) % TABS.length]!.id;
         });
-      }, CYCLE_MS);
+      }, dwell);
     };
 
     const obs = new IntersectionObserver(
@@ -180,12 +211,36 @@ export default function EffectPilledShowcase() {
     };
   }, [tab, pinned]);
 
+  // Inner oscillation for the Layer tab — swap between ddb and d1
+  // implementations on a separate timer. Resets to "ddb" whenever we
+  // leave the tab so the user always sees the Dynamo example first.
+  useEffect(() => {
+    if (tab !== "layer") {
+      setLayerImpl("ddb");
+      return;
+    }
+    let cancelled = false;
+    const timer = setInterval(() => {
+      if (cancelled) return;
+      setLayerImpl((i) => (i === "ddb" ? "d1" : "ddb"));
+    }, LAYER_IMPL_SWAP_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [tab]);
+
   const onTab = (next: Tab) => {
     setPinned(true);
     setTab(next);
   };
 
-  const codeHtml = highlightTS(CODE_BY_TAB[tab]);
+  const codeText =
+    tab === "layer" ? LAYER_CODE_BY_IMPL[layerImpl] : CODE_BY_TAB[tab];
+  const codeHtml = highlightTS(codeText);
+  // Drives the fade animation on both code + artifact when content swaps.
+  // Includes the Layer impl so the inner ddb/d1 oscillation also fades.
+  const splitKey = tab === "layer" ? `layer-${layerImpl}` : tab;
 
   return (
     <div ref={wrapRef} className="eff-showcase">
@@ -212,15 +267,15 @@ export default function EffectPilledShowcase() {
         </div>
 
         <div className="eff-showcase__body">
-          <div className="eff-showcase__split" key={tab}>
+          <div className="eff-showcase__split" key={splitKey}>
             <div className="eff-showcase__code">
               <pre
-                className="eff-showcase__pre"
+                className="eff-showcase__pre eff-showcase__fade"
                 dangerouslySetInnerHTML={{ __html: codeHtml }}
               />
             </div>
             <div className="eff-showcase__artifact">
-              <ArtifactPanel tab={tab} />
+              <ArtifactPanel tab={tab} layerImpl={layerImpl} />
             </div>
           </div>
         </div>
@@ -232,7 +287,13 @@ export default function EffectPilledShowcase() {
   );
 }
 
-function ArtifactPanel({ tab }: { tab: Tab }) {
+function ArtifactPanel({
+  tab,
+  layerImpl,
+}: {
+  tab: Tab;
+  layerImpl: LayerImpl;
+}) {
   switch (tab) {
     case "iam":
       return <IamPanel />;
@@ -245,7 +306,7 @@ function ArtifactPanel({ tab }: { tab: Tab }) {
     case "workflow":
       return <WorkflowPanel />;
     case "layer":
-      return <LayerPanel />;
+      return <LayerPanel impl={layerImpl} />;
   }
 }
 
@@ -422,7 +483,7 @@ function WorkflowPanel() {
 
 /* ───────────────────────── Layers ───────────────────────── */
 
-function LayerPanel() {
+function LayerPanel({ impl }: { impl: LayerImpl }) {
   return (
     <>
       <div className="eff-showcase__group">
@@ -436,18 +497,37 @@ function LayerPanel() {
       </div>
       <div className="eff-showcase__group">
         <div className="eff-showcase__group-title">Composed from</div>
-        <FeatureRow
-          icon="logos:aws-dynamodb"
-          label="DynamoDB.Table"
-          sub='"JobsTable" · partitionKey: "id"'
-          delay={240}
-        />
-        <FeatureRow
-          icon="mdi:key"
-          label="GetItem · PutItem"
-          sub="bound capabilities · IAM auto-generated"
-          delay={340}
-        />
+        {impl === "ddb" ? (
+          <>
+            <FeatureRow
+              icon="logos:aws-dynamodb"
+              label="DynamoDB.Table"
+              sub='"JobsTable" · partitionKey: "id"'
+              delay={240}
+            />
+            <FeatureRow
+              icon="mdi:key"
+              label="GetItem · PutItem"
+              sub="bound capabilities · IAM auto-generated"
+              delay={340}
+            />
+          </>
+        ) : (
+          <>
+            <FeatureRow
+              icon="logos:cloudflare-icon"
+              label="Cloudflare.D1Database"
+              sub='"JobsDB" · serverless SQL'
+              delay={240}
+            />
+            <FeatureRow
+              icon="mdi:database-cog"
+              label="D1Connection"
+              sub="bound capability · prepare · exec · batch"
+              delay={340}
+            />
+          </>
+        )}
       </div>
     </>
   );

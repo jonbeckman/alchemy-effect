@@ -680,6 +680,12 @@ body.alc-root,
   }
 }
 
+/* Used on the code <pre> so it fades in alongside the artifact rows
+   when the panel remounts (tab switch OR Layer impl oscillation). */
+.eff-showcase__fade {
+  animation: eff-fade-in 320ms ease both;
+}
+
 /* Mobile: stack code above artifact with a "↓ generates" cue. The flow
    diagram also rotates from horizontal 3-up to vertical so the nodes
    stack and the edges become down-pointing arrows. */
