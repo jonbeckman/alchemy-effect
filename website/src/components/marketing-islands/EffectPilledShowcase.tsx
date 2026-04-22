@@ -30,10 +30,7 @@ const IAM_CODE = `export default AWS.Lambda.Function(
     return {
       fetch: Effect.gen(function* () {
         const req = yield* HttpServerRequest;
-        const key = req.url.split("/").pop()!;
-        const photo = yield* getPhoto({ key });
-        yield* putJob({ id: key, photo });
-        return HttpServerResponse.text("ok");
+        return yield* getPhoto({ key: req.url.slice(1) });
       }),
     };
   }),
