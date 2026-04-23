@@ -1,39 +1,18 @@
 import * as Cloudflare from "alchemy/Cloudflare";
 import type { ResourceState } from "alchemy/State";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpServerRequest } from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import StateStore from "./StateStore.ts";
 import { AuthToken } from "./Token.ts";
 
-class Unauthorized {
-  readonly _tag = "Unauthorized";
-}
-
-class BadRequest {
-  readonly _tag = "BadRequest";
-  constructor(readonly message: string) {}
-}
-
-/**
- * RPC method names the worker exposes over HTTP. Each maps 1:1 to a
- * method on `StateService` in `alchemy/src/State/State.ts`.
- */
-const RPC_METHODS = [
-  "listStacks",
-  "listStages",
-  "list",
-  "get",
-  "set",
-  "delete",
-  "getReplacedResources",
-] as const;
-
-type RpcMethod = (typeof RPC_METHODS)[number];
-
-const isRpcMethod = (value: string): value is RpcMethod =>
-  (RPC_METHODS as readonly string[]).includes(value);
+class Unauthorized extends Data.TaggedError("Unauthorized")<{}> {}
+class BadRequest extends Data.TaggedError("BadRequest")<{
+  readonly message: string;
+}> {}
 
 /**
  * Timing-safe string comparison using the Workers runtime's built-in
@@ -74,9 +53,9 @@ const requireString = (
   return typeof value === "string" && value.length > 0
     ? Effect.succeed(value)
     : Effect.fail(
-        new BadRequest(
-          `field '${field}' is required and must be a non-empty string`,
-        ),
+        new BadRequest({
+          message: `field '${field}' is required and must be a non-empty string`,
+        }),
       );
 };
 
@@ -88,9 +67,70 @@ const requireObject = (
   return value && typeof value === "object" && !Array.isArray(value)
     ? Effect.succeed(value as ResourceState)
     : Effect.fail(
-        new BadRequest(`field '${field}' is required and must be an object`),
+        new BadRequest({
+          message: `field '${field}' is required and must be an object`,
+        }),
       );
 };
+
+/**
+ * Parse the JSON body of the current request, normalising errors to
+ * `BadRequest`. Reads `HttpServerRequest` from the Effect context.
+ */
+const parseBody: Effect.Effect<
+  Record<string, unknown>,
+  BadRequest,
+  HttpServerRequest
+> = Effect.gen(function* () {
+  const request = yield* HttpServerRequest;
+  const text = yield* request.text.pipe(Effect.orDie);
+  return yield* Effect.try({
+    try: () => {
+      const body = text ? JSON.parse(text) : {};
+      if (body === null || typeof body !== "object" || Array.isArray(body)) {
+        throw new Error("expected JSON object body");
+      }
+      return body as Record<string, unknown>;
+    },
+    catch: (e) =>
+      new BadRequest({
+        message: e instanceof Error ? e.message : "invalid JSON body",
+      }),
+  });
+});
+
+/** Read `:project` from the matched route path. */
+const getProject = HttpRouter.params.pipe(
+  Effect.map((params) => decodeURIComponent(params.project ?? "")),
+);
+
+/**
+ * Wrap a handler so its tagged errors map to structured JSON
+ * responses and any defect (e.g. from `Effect.orDie`ed DO calls)
+ * returns a JSON 500 instead of Cloudflare's default plain-text error
+ * page.
+ *
+ * Handlers declare their failure modes as `Unauthorized | BadRequest`
+ * so `catchTag` can pattern-match concretely.
+ */
+const wrap = <R>(
+  handler: Effect.Effect<
+    HttpServerResponse.HttpServerResponse,
+    Unauthorized | BadRequest,
+    R
+  >,
+): Effect.Effect<HttpServerResponse.HttpServerResponse, never, R> =>
+  handler.pipe(
+    Effect.catchTag("Unauthorized", () =>
+      errorResponse("unauthorized", "invalid bearer token", 401),
+    ),
+    Effect.catchTag("BadRequest", (e) =>
+      errorResponse("bad_request", e.message, 400),
+    ),
+    Effect.catchCause((cause) =>
+      errorResponse("internal", String(cause), 500),
+    ),
+  );
 
 export default class Api extends Cloudflare.Worker<Api>()(
   "Api",
@@ -112,139 +152,173 @@ export default class Api extends Cloudflare.Worker<Api>()(
     // to be hit once per isolate boot.
     let cachedToken: string | undefined;
 
-    return {
-      fetch: Effect.gen(function* () {
-        const request = yield* HttpServerRequest;
-        const url = new URL(request.url, "http://localhost");
-        const path = url.pathname;
-        const method = request.method;
-
-        return yield* Effect.gen(function* () {
-          // --- auth ---
-          const authHeader = request.headers.authorization ?? "";
-          const prefix = "Bearer ";
-          if (!authHeader.startsWith(prefix)) {
-            return yield* Effect.fail(new Unauthorized());
-          }
-          const presented = authHeader.slice(prefix.length).trim();
-          if (cachedToken === undefined) {
-            cachedToken = yield* secret.get().pipe(
-              Effect.catchTag("SecretError", () =>
-                Effect.fail(new Unauthorized()),
-              ),
-            );
-          }
-          if (!cachedToken || !timingSafeEqual(presented, cachedToken)) {
-            return yield* Effect.fail(new Unauthorized());
-          }
-
-          // --- route: POST /projects/:project/state/:method ---
-          const match = path.match(
-            /^\/projects\/([^/]+)\/state\/([^/]+)\/?$/,
-          );
-          if (!match || method !== "POST") {
-            return yield* errorResponse(
-              "not_found",
-              `${method} ${path}`,
-              404,
-            );
-          }
-          const project = decodeURIComponent(match[1]!);
-          const rpc = match[2]!;
-          if (!isRpcMethod(rpc)) {
-            return yield* Effect.fail(
-              new BadRequest(`unknown method: ${rpc}`),
-            );
-          }
-
-          // --- parse body ---
-          const text = yield* request.text.pipe(Effect.orDie);
-          let body: Record<string, unknown>;
-          try {
-            body = text ? JSON.parse(text) : {};
-          } catch {
-            return yield* Effect.fail(new BadRequest("invalid JSON body"));
-          }
-          if (body === null || typeof body !== "object" || Array.isArray(body)) {
-            return yield* Effect.fail(
-              new BadRequest("expected JSON object body"),
-            );
-          }
-
-          // --- dispatch ---
-          const stub = stateStore.getByName(project);
-
-          switch (rpc) {
-            case "listStacks": {
-              const result = yield* stub.listStacks().pipe(Effect.orDie);
-              return yield* okResponse(result);
-            }
-            case "listStages": {
-              const stack = yield* requireString(body, "stack");
-              const result = yield* stub
-                .listStages({ stack })
-                .pipe(Effect.orDie);
-              return yield* okResponse(result);
-            }
-            case "list": {
-              const stack = yield* requireString(body, "stack");
-              const stage = yield* requireString(body, "stage");
-              const result = yield* stub
-                .list({ stack, stage })
-                .pipe(Effect.orDie);
-              return yield* okResponse(result);
-            }
-            case "get": {
-              const stack = yield* requireString(body, "stack");
-              const stage = yield* requireString(body, "stage");
-              const fqn = yield* requireString(body, "fqn");
-              const result = yield* stub
-                .get({ stack, stage, fqn })
-                .pipe(Effect.orDie);
-              return yield* okResponse(result);
-            }
-            case "set": {
-              const stack = yield* requireString(body, "stack");
-              const stage = yield* requireString(body, "stage");
-              const fqn = yield* requireString(body, "fqn");
-              const value = yield* requireObject(body, "value");
-              const result = yield* stub
-                .set({ stack, stage, fqn, value })
-                .pipe(Effect.orDie);
-              return yield* okResponse(result);
-            }
-            case "delete": {
-              const stack = yield* requireString(body, "stack");
-              const stage = yield* requireString(body, "stage");
-              const fqn = yield* requireString(body, "fqn");
-              // The DO method is `remove`, not `delete` — `delete` is
-              // reserved by Cloudflare's RPC stub proxy.
-              yield* stub
-                .remove({ stack, stage, fqn })
-                .pipe(Effect.orDie);
-              return yield* okResponse(null);
-            }
-            case "getReplacedResources": {
-              const stack = yield* requireString(body, "stack");
-              const stage = yield* requireString(body, "stage");
-              const result = yield* stub
-                .getReplacedResources({ stack, stage })
-                .pipe(Effect.orDie);
-              return yield* okResponse(result);
-            }
-          }
-        }).pipe(
-          Effect.catchTag("Unauthorized", () =>
-            errorResponse("unauthorized", "invalid bearer token", 401),
-          ),
-          Effect.catchTag("BadRequest", (e) =>
-            errorResponse("bad_request", e.message, 400),
+    /**
+     * Runs before every route: verifies the `Authorization: Bearer …`
+     * header against the cached secret. Fails with `Unauthorized` so
+     * the per-route `wrap` helper can map it to a 401.
+     */
+    const authenticate = Effect.gen(function* () {
+      const request = yield* HttpServerRequest;
+      const authHeader = request.headers.authorization ?? "";
+      const prefix = "Bearer ";
+      if (!authHeader.startsWith(prefix)) {
+        return yield* Effect.fail(new Unauthorized());
+      }
+      const presented = authHeader.slice(prefix.length).trim();
+      if (cachedToken === undefined) {
+        cachedToken = yield* secret.get().pipe(
+          Effect.catchTag("SecretError", () =>
+            Effect.fail(new Unauthorized()),
           ),
         );
-      }).pipe(
-        // Catch both errors and defects — any DO call that fails via
-        // `Effect.orDie` surfaces as a defect, and without this it
-        // would bubble up as Cloudflare's default plain-text 500.
+      }
+      if (!cachedToken || !timingSafeEqual(presented, cachedToken)) {
+        return yield* Effect.fail(new Unauthorized());
+      }
+    });
+
+    // One Layer per route. Composed via `Layer.mergeAll` and fed into
+    // `HttpRouter.toHttpEffect` below — that call discharges the
+    // router's phantom `Request<"Requires", …>` markers so the
+    // resulting fetch effect slots cleanly into the Worker shape.
+    const routes = Layer.mergeAll(
+      HttpRouter.add(
+        "POST",
+        "/projects/:project/state/listStacks",
+        wrap(
+          Effect.gen(function* () {
+            yield* authenticate;
+            const project = yield* getProject;
+            const result = yield* stateStore
+              .getByName(project)
+              .listStacks()
+              .pipe(Effect.orDie);
+            return yield* okResponse(result);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "POST",
+        "/projects/:project/state/listStages",
+        wrap(
+          Effect.gen(function* () {
+            yield* authenticate;
+            const project = yield* getProject;
+            const body = yield* parseBody;
+            const stack = yield* requireString(body, "stack");
+            const result = yield* stateStore
+              .getByName(project)
+              .listStages({ stack })
+              .pipe(Effect.orDie);
+            return yield* okResponse(result);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "POST",
+        "/projects/:project/state/list",
+        wrap(
+          Effect.gen(function* () {
+            yield* authenticate;
+            const project = yield* getProject;
+            const body = yield* parseBody;
+            const stack = yield* requireString(body, "stack");
+            const stage = yield* requireString(body, "stage");
+            const result = yield* stateStore
+              .getByName(project)
+              .list({ stack, stage })
+              .pipe(Effect.orDie);
+            return yield* okResponse(result);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "POST",
+        "/projects/:project/state/get",
+        wrap(
+          Effect.gen(function* () {
+            yield* authenticate;
+            const project = yield* getProject;
+            const body = yield* parseBody;
+            const stack = yield* requireString(body, "stack");
+            const stage = yield* requireString(body, "stage");
+            const fqn = yield* requireString(body, "fqn");
+            const result = yield* stateStore
+              .getByName(project)
+              .get({ stack, stage, fqn })
+              .pipe(Effect.orDie);
+            return yield* okResponse(result);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "POST",
+        "/projects/:project/state/set",
+        wrap(
+          Effect.gen(function* () {
+            yield* authenticate;
+            const project = yield* getProject;
+            const body = yield* parseBody;
+            const stack = yield* requireString(body, "stack");
+            const stage = yield* requireString(body, "stage");
+            const fqn = yield* requireString(body, "fqn");
+            const value = yield* requireObject(body, "value");
+            const result = yield* stateStore
+              .getByName(project)
+              .set({ stack, stage, fqn, value })
+              .pipe(Effect.orDie);
+            return yield* okResponse(result);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "POST",
+        "/projects/:project/state/delete",
+        wrap(
+          Effect.gen(function* () {
+            yield* authenticate;
+            const project = yield* getProject;
+            const body = yield* parseBody;
+            const stack = yield* requireString(body, "stack");
+            const stage = yield* requireString(body, "stage");
+            const fqn = yield* requireString(body, "fqn");
+            // The DO method is `remove`, not `delete` — `delete` is
+            // reserved by Cloudflare's RPC stub proxy.
+            yield* stateStore
+              .getByName(project)
+              .remove({ stack, stage, fqn })
+              .pipe(Effect.orDie);
+            return yield* okResponse(null);
+          }),
+        ),
+      ),
+      HttpRouter.add(
+        "POST",
+        "/projects/:project/state/getReplacedResources",
+        wrap(
+          Effect.gen(function* () {
+            yield* authenticate;
+            const project = yield* getProject;
+            const body = yield* parseBody;
+            const stack = yield* requireString(body, "stack");
+            const stage = yield* requireString(body, "stage");
+            const result = yield* stateStore
+              .getByName(project)
+              .getReplacedResources({ stack, stage })
+              .pipe(Effect.orDie);
+            return yield* okResponse(result);
+          }),
+        ),
+      ),
+    ).pipe(Layer.provideMerge(HttpRouter.layer));
+
+    const fetch = yield* HttpRouter.toHttpEffect(routes);
+
+    return {
+      // Any error from unmatched routes (`HttpServerError`) or a
+      // leaked defect collapses to a JSON 500 instead of Cloudflare's
+      // default plain-text 500 page.
+      fetch: fetch.pipe(
         Effect.catchCause((cause) =>
           errorResponse("internal", String(cause), 500),
         ),
