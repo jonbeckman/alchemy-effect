@@ -1,6 +1,8 @@
 import { Random } from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { STATE_STORE_AUTH_TOKEN_SECRET_NAME } from "alchemy/State";
+// Leaf import so the worker bundle doesn't transitively load
+// `HttpStateStoreAuth.ts` (Clank → sisteransi → workerd rejects).
+import { STATE_STORE_AUTH_TOKEN_SECRET_NAME } from "alchemy/State/HttpStateStoreConstants";
 import * as Effect from "effect/Effect";
 
 /**

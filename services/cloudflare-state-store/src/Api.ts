@@ -1,6 +1,9 @@
 import * as Cloudflare from "alchemy/Cloudflare";
 import type { ResourceState } from "alchemy/State";
-import { STATE_STORE_SCRIPT_NAME } from "alchemy/State";
+// Import constants from the leaf file — NOT from `alchemy/State` —
+// so the worker bundle doesn't drag `HttpStateStoreAuth.ts` in,
+// which would pull Clank → `@clack/prompts` → `sisteransi`.
+import { STATE_STORE_SCRIPT_NAME } from "alchemy/State/HttpStateStoreConstants";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -165,8 +168,12 @@ export default class Api extends Cloudflare.Worker<Api>()(
       }
     });
 
+    // `stateStore.getByName(...)` must be called lazily from inside a
+    // request handler — at plan/pre-create time the DO binding isn't
+    // bound yet (`WorkerEnvironment` is undefined) and the call throws.
+
     /** DO instance that holds the stack-name index. */
-    const rootDO = stateStore.getByName(ROOT_DO_NAME);
+    const rootDO = () => stateStore.getByName(ROOT_DO_NAME);
 
     /** DO instance for a specific stack. */
     const stackDO = (stack: string) => stateStore.getByName(stack);
@@ -178,7 +185,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
         wrap(
           Effect.gen(function* () {
             yield* authenticate;
-            const result = yield* rootDO.listStacks().pipe(Effect.orDie);
+            const result = yield* rootDO().listStacks().pipe(Effect.orDie);
             return yield* okResponse(result);
           }),
         ),
@@ -248,7 +255,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
             const result = yield* stackDO(stack)
               .set({ stage, fqn, value })
               .pipe(Effect.orDie);
-            yield* rootDO.registerStack({ stack }).pipe(Effect.orDie);
+            yield* rootDO().registerStack({ stack }).pipe(Effect.orDie);
             return yield* okResponse(result);
           }),
         ),

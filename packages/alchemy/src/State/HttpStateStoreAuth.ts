@@ -22,33 +22,20 @@ import {
   EdgeSessionError,
 } from "../Cloudflare/EdgeSession.ts";
 import * as Clank from "../Util/Clank.ts";
+import {
+  HTTP_STATE_STORE_AUTH_PROVIDER_NAME,
+  STATE_STORE_AUTH_TOKEN_SECRET_NAME,
+  STATE_STORE_SCRIPT_NAME,
+} from "./HttpStateStoreConstants.ts";
 
-/**
- * Canonical name used to look up this provider in the `AuthProviders`
- * registry and in `~/.alchemy/credentials`.
- */
-export const HTTP_STATE_STORE_AUTH_PROVIDER_NAME = "HttpStateStore" as const;
+export {
+  HTTP_STATE_STORE_AUTH_PROVIDER_NAME,
+  STATE_STORE_AUTH_TOKEN_SECRET_NAME,
+  STATE_STORE_SCRIPT_NAME,
+};
 
 /** Filename used for stored credentials under the profile directory. */
 const CREDENTIALS_FILE = "http-state-store";
-
-/**
- * Fixed Cloudflare Worker script name the `cloudflare` login method
- * expects a deployed state store to use. Both the server (which
- * passes this as `name` to its `Cloudflare.Worker`) and the login
- * flow (which derives the service URL from it) import this constant.
- */
-export const STATE_STORE_SCRIPT_NAME = "alchemy-state-store" as const;
-
-/**
- * Logical id / secret name of the bearer token the state-store
- * worker authenticates against. The `Cloudflare.Secret` provider
- * uses the logical id as the secret name when no explicit `name`
- * prop is supplied, so this is the single source of truth for both
- * sides of the handshake.
- */
-export const STATE_STORE_AUTH_TOKEN_SECRET_NAME =
-  "AlchmeyStateStoreToken " as const;
 
 /** Preview script name used by the edge-probe worker. */
 const PROBE_SCRIPT_NAME = "alchemy-state-store-probe";

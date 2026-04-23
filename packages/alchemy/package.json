@@ -193,6 +193,12 @@
       "worker": "./src/State/index.ts",
       "import": "./lib/State/index.js"
     },
+    "./State/*": {
+      "types": "./src/State/*.ts",
+      "bun": "./src/State/*.ts",
+      "worker": "./src/State/*.ts",
+      "import": "./lib/State/*.js"
+    },
     "./Test/Bun": {
       "types": "./src/Test/Bun.ts",
       "bun": "./src/Test/Bun.ts",
