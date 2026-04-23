@@ -10,7 +10,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
     main: import.meta.path,
   },
   Effect.gen(function* () {
-    const apiKey = yield* Cloudflare.StoreSecret.bind(ApiKey);
+    const apiKey = yield* Cloudflare.Secret.bind(ApiKey);
 
     return {
       fetch: Effect.gen(function* () {

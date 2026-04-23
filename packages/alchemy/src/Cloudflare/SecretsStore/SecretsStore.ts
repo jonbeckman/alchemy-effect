@@ -2,7 +2,7 @@ import * as secretsStore from "@distilled.cloud/cloudflare/secrets-store";
 import * as Effect from "effect/Effect";
 import * as Provider from "../../Provider.ts";
 import { Resource } from "../../Resource.ts";
-import { Account } from "../Account.ts";
+import { CloudflareEnvironment } from "../CloudflareEnvironment.ts";
 import type { Providers } from "../Providers.ts";
 
 export type SecretsStore = Resource<
@@ -48,7 +48,7 @@ export const SecretsStoreProvider = () =>
   Provider.effect(
     SecretsStore,
     Effect.gen(function* () {
-      const accountId = yield* Account;
+      const { accountId } = yield* CloudflareEnvironment;
       const createStore = yield* secretsStore.createStore;
       const listStores = yield* secretsStore.listStores;
 
