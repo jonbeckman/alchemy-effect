@@ -26,20 +26,43 @@ export type ProvidedServices = StackServices;
 type TestEffect<A, Req = never> = Effect.Effect<
   A,
   any,
-  BunServices.BunServices | HttpClient | Scope | Req
+  | BunServices.BunServices
+  | HttpClient
+  | Scope
+  | AuthProviders
+  | DotAlchemy
+  | State.State
+  | Req
 >;
 
 const platform = Layer.mergeAll(BunServices.layer, FetchHttpClient.layer);
 
-// override alchemy state store, CLI/reporting and dotAlchemy
+// CLI/reporting + dotAlchemy (state store is composed separately so
+// callers can override it per-test via `deploy`/`destroy` options).
 const alchemy = Layer.mergeAll(
-  // TODO(sam): support overriding these
-  State.LocalState,
   // CLI.inkCLI(),
   // optional
   Logger.layer([Logger.consolePretty()]),
   dotAlchemy,
 );
+
+/**
+ * Fallback `State` layer. Applied at the outermost level by `run`,
+ * so any test that wants a different backend just wraps its
+ * `deploy`/`destroy` call with its own `Effect.provide(…)` — the
+ * inner provide wins the State requirement before this fallback is
+ * reached.
+ *
+ * ```ts
+ * // uses LocalState (default)
+ * yield* deploy(Stack);
+ *
+ * // uses HttpStateStore
+ * yield* deploy(Stack).pipe(Effect.provide(HttpStateStore));
+ * ```
+ */
+const defaultState: Layer.Layer<State.State, never, BunServices.BunServices> =
+  State.LocalState;
 
 const run = <A>(effect: TestEffect<A>) =>
   Effect.gen(function* () {
@@ -51,6 +74,10 @@ const run = <A>(effect: TestEffect<A>) =>
     );
   }).pipe(
     Effect.provideService(AuthProviders, {}),
+    // `defaultState` is provided outside `exec` too so plain `test(...)`
+    // bodies (which don't go through `deploy`/`destroy`) still have a
+    // `State` service available.
+    Effect.provide(defaultState),
     Effect.provide(Layer.provideMerge(alchemy, platform)),
     Effect.scoped,
     Effect.runPromise,
@@ -106,10 +133,7 @@ export namespace test {
 
 export const describe = bun.describe;
 
-export function beforeAll<A>(
-  eff: Effect.Effect<A, any>,
-  options?: HookOptions,
-) {
+export function beforeAll<A>(eff: TestEffect<A>, options?: HookOptions) {
   let a: A;
   bun.beforeAll(
     () => run(eff).then((v) => (a = v)),
@@ -120,21 +144,17 @@ export function beforeAll<A>(
   return Effect.sync(() => a);
 }
 
-export function beforeEach(
-  eff: Effect.Effect<void, any>,
-  options?: HookOptions,
-) {
+export function beforeEach(eff: TestEffect<void>, options?: HookOptions) {
   bun.beforeEach(() => run(eff), options);
 }
 
-export function afterAll(eff: Effect.Effect<any, any>, options?: HookOptions) {
+export function afterAll(eff: TestEffect<any>, options?: HookOptions) {
   bun.afterAll(() => run(eff), options);
 }
 
 export namespace afterAll {
   export const skipIf =
-    (predicate: boolean) =>
-    (test: Effect.Effect<void, any>, options?: HookOptions) => {
+    (predicate: boolean) => (test: TestEffect<void>, options?: HookOptions) => {
       if (predicate) {
       } else {
         bun.afterAll(
@@ -147,19 +167,13 @@ export namespace afterAll {
     };
 }
 
-export function afterEach(
-  eff: Effect.Effect<void, any>,
-  options?: HookOptions,
-) {
+export function afterEach(eff: TestEffect<void>, options?: HookOptions) {
   bun.afterEach(() => run(eff), options);
 }
 
 export const deploy = <A>(
   effect: TestEffect<CompiledStack<A>, Stage | DotAlchemy>,
-  options?: {
-    /** @default test */
-    stage?: string;
-  },
+  options?: { stage?: string },
 ) =>
   exec(
     effect,
@@ -174,10 +188,7 @@ export const deploy = <A>(
 
 export const destroy = (
   effect: TestEffect<CompiledStack, Stage | DotAlchemy>,
-  options?: {
-    /** @default test */
-    stage?: string;
-  },
+  options?: { stage?: string },
 ) =>
   exec(
     effect,
@@ -199,9 +210,7 @@ export const destroy = (
 const exec = <A, B>(
   effect: TestEffect<CompiledStack<A>, Stage | DotAlchemy>,
   fn: (stack: CompiledStack<A>) => Effect.Effect<B, any, any>,
-  options?: {
-    stage?: string;
-  },
+  options?: { stage?: string },
 ) =>
   Effect.gen(function* () {
     const stack = yield* effect;
@@ -213,6 +222,10 @@ const exec = <A, B>(
       Effect.provide(Layer.succeed(ConfigProvider, configProvider)),
     );
   }).pipe(
+    // `State` is intentionally NOT provided here — its requirement
+    // propagates up so a caller can override it with
+    // `deploy(Stack).pipe(Effect.provide(MyState))`. The outer `run`
+    // applies `defaultState` as a fallback.
     Effect.provideService(AuthProviders, {}),
     Effect.provide(Layer.succeed(Stage, options?.stage ?? "test")),
     Effect.provide(TestCli),
