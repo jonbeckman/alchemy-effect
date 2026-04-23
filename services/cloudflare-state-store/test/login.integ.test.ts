@@ -14,7 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import StateStoreStack from "../alchemy.run.ts";
 import { loginWithCloudflare } from "../src/Login.ts";
-import TestStack from "./TestStack.ts";
+import TestStack from "./TestStack/Stack.ts";
 
 /**
  * Project namespace used for every HTTP state-store call in this

@@ -1,7 +1,7 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
-import TestWorker from "./TestWorker.ts";
+import TestWorker from "./Worker.ts";
 
 /**
  * Downstream stack whose only resource is {@link TestWorker}. Deploy
