@@ -1,8 +1,5 @@
 import * as Cloudflare from "alchemy/Cloudflare";
 import type { ResourceState } from "alchemy/State";
-// Import constants from the leaf file — NOT from `alchemy/State` —
-// so the worker bundle doesn't drag `HttpStateStoreAuth.ts` in,
-// which would pull Clank → `@clack/prompts` → `sisteransi`.
 import { STATE_STORE_SCRIPT_NAME } from "alchemy/State/HttpStateStoreConstants";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -272,9 +269,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
             const fqn = yield* requireString(body, "fqn");
             // The DO method is `remove`, not `delete` — `delete` is
             // reserved by Cloudflare's RPC stub proxy.
-            yield* stackDO(stack)
-              .remove({ stage, fqn })
-              .pipe(Effect.orDie);
+            yield* stackDO(stack).remove({ stage, fqn }).pipe(Effect.orDie);
             return yield* okResponse(null);
           }),
         ),
