@@ -46,24 +46,6 @@ const alchemy = Layer.mergeAll(
   dotAlchemy,
 );
 
-/**
- * Fallback `State` layer. Applied at the outermost level by `run`,
- * so any test that wants a different backend just wraps its
- * `deploy`/`destroy` call with its own `Effect.provide(…)` — the
- * inner provide wins the State requirement before this fallback is
- * reached.
- *
- * ```ts
- * // uses LocalState (default)
- * yield* deploy(Stack);
- *
- * // uses HttpStateStore
- * yield* deploy(Stack).pipe(Effect.provide(HttpStateStore));
- * ```
- */
-const defaultState: Layer.Layer<State.State, never, BunServices.BunServices> =
-  State.LocalState;
-
 const run = <A>(effect: TestEffect<A>) =>
   Effect.gen(function* () {
     const configProvider = yield* loadConfigProvider(Option.none());
@@ -74,10 +56,7 @@ const run = <A>(effect: TestEffect<A>) =>
     );
   }).pipe(
     Effect.provideService(AuthProviders, {}),
-    // `defaultState` is provided outside `exec` too so plain `test(...)`
-    // bodies (which don't go through `deploy`/`destroy`) still have a
-    // `State` service available.
-    Effect.provide(defaultState),
+    Effect.provide(State.LocalState),
     Effect.provide(Layer.provideMerge(alchemy, platform)),
     Effect.scoped,
     Effect.runPromise,
@@ -234,7 +213,7 @@ const exec = <A, B>(
     // `State` is intentionally NOT provided here — its requirement
     // propagates up so a caller can override it with
     // `deploy(Stack).pipe(Effect.provide(MyState))`. The outer `run`
-    // applies `defaultState` as a fallback.
+    // applies `State.LocalState` as a fallback.
     Effect.provideService(AuthProviders, {}),
     Effect.provide(Layer.succeed(Stage, options?.stage ?? "test")),
     Effect.provide(TestCli),
