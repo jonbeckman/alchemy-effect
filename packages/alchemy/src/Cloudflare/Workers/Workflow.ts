@@ -380,7 +380,6 @@ export const WorkflowProvider = () =>
   Provider.effect(
     WorkflowResource,
     Effect.gen(function* () {
-      const { accountId } = yield* CloudflareEnvironment;
       const putWorkflow = yield* workflows.putWorkflow;
       const deleteWorkflow = yield* workflows.deleteWorkflow;
 
@@ -390,6 +389,7 @@ export const WorkflowProvider = () =>
           yield* Effect.logInfo(
             `Cloudflare Workflow create: ${news.workflowName}`,
           );
+          const { accountId } = yield* CloudflareEnvironment;
           const result = yield* putWorkflow({
             accountId,
             workflowName: news.workflowName,

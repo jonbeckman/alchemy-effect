@@ -63,7 +63,6 @@ export const KVNamespaceProvider = () =>
   Provider.effect(
     KVNamespace,
     Effect.gen(function* () {
-      const { accountId } = yield* CloudflareEnvironment;
       const createNamespace = yield* kv.createNamespace;
       const updateNamespace = yield* kv.updateNamespace;
       const deleteNamespace = yield* kv.deleteNamespace;
@@ -79,6 +78,7 @@ export const KVNamespaceProvider = () =>
         stables: ["namespaceId", "accountId"],
         diff: Effect.fn(function* ({ id, olds = {}, news = {}, output }) {
           if (!isResolved(news)) return undefined;
+          const { accountId } = yield* CloudflareEnvironment;
           if ((output?.accountId ?? accountId) !== accountId) {
             return { action: "replace" } as const;
           }
@@ -90,6 +90,7 @@ export const KVNamespaceProvider = () =>
           }
         }),
         create: Effect.fn(function* ({ id, news = {} }) {
+          const { accountId } = yield* CloudflareEnvironment;
           const title = yield* createTitle(id, news.title);
           const namespace = yield* createNamespace({
             accountId,
@@ -120,7 +121,7 @@ export const KVNamespaceProvider = () =>
         update: Effect.fn(function* ({ id, news = {}, output }) {
           const title = yield* createTitle(id, news.title);
           const namespace = yield* updateNamespace({
-            accountId,
+            accountId: output.accountId,
             namespaceId: output.namespaceId,
             title,
           });
@@ -128,7 +129,7 @@ export const KVNamespaceProvider = () =>
             title: namespace.title,
             namespaceId: namespace.id,
             supportsUrlEncoding: namespace.supportsUrlEncoding ?? undefined,
-            accountId,
+            accountId: output.accountId,
           };
         }),
         delete: Effect.fn(function* ({ output }) {
@@ -154,6 +155,7 @@ export const KVNamespaceProvider = () =>
               ),
             );
           }
+          const { accountId } = yield* CloudflareEnvironment;
           const title = yield* createTitle(id, olds?.title);
           const namespaces = yield* listNamespaces({ accountId });
           const match = namespaces.result.find((ns) => ns.title === title);

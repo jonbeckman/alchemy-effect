@@ -95,7 +95,6 @@ export const DatabaseProvider = () =>
   Provider.effect(
     D1Database,
     Effect.gen(function* () {
-      const { accountId } = yield* CloudflareEnvironment;
       const createDb = yield* d1.createDatabase;
       const getDb = yield* d1.getDatabase;
       const patchDb = yield* d1.patchDatabase;
@@ -111,6 +110,7 @@ export const DatabaseProvider = () =>
         stables: ["databaseId", "accountId"],
         diff: Effect.fn(function* ({ id, olds = {}, news = {}, output }) {
           if (!isResolved(news)) return undefined;
+          const { accountId } = yield* CloudflareEnvironment;
           if ((output?.accountId ?? accountId) !== accountId) {
             return { action: "replace" } as const;
           }
@@ -155,6 +155,7 @@ export const DatabaseProvider = () =>
               ),
             );
           }
+          const { accountId } = yield* CloudflareEnvironment;
           const name = yield* createDatabaseName(id, olds?.name);
           const dbs = yield* listDbs({ accountId, name });
           const match = dbs.result.find((db) => db.name === name);
@@ -170,6 +171,7 @@ export const DatabaseProvider = () =>
           return undefined;
         }),
         create: Effect.fn(function* ({ id, news = {} }) {
+          const { accountId } = yield* CloudflareEnvironment;
           const name = yield* createDatabaseName(id, news.name);
           const jurisdiction = news.jurisdiction ?? "default";
           const db = yield* createDb({

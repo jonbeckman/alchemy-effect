@@ -48,13 +48,13 @@ export const SecretsStoreProvider = () =>
   Provider.effect(
     SecretsStore,
     Effect.gen(function* () {
-      const { accountId } = yield* CloudflareEnvironment;
       const createStore = yield* secretsStore.createStore;
       const listStores = yield* secretsStore.listStores;
 
       return {
         stables: ["storeId", "storeName", "accountId"],
         create: Effect.fn(function* () {
+          const { accountId } = yield* CloudflareEnvironment;
           const stores = yield* listStores({ accountId });
           if (stores.result.length > 0) {
             // No name specified — adopt the first (and likely only) store.

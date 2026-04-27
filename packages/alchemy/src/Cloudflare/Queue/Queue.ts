@@ -65,7 +65,6 @@ export const QueueProvider = () =>
   Provider.effect(
     Queue,
     Effect.gen(function* () {
-      const { accountId } = yield* CloudflareEnvironment;
       const createQueue = yield* queues.createQueue;
       const getQueue = yield* queues.getQueue;
       const updateQueue = yield* queues.updateQueue;
@@ -85,6 +84,7 @@ export const QueueProvider = () =>
         stables: ["queueId", "accountId"],
         diff: Effect.fn(function* ({ id, olds = {}, news = {}, output }) {
           if (!isResolved(news)) return undefined;
+          const { accountId } = yield* CloudflareEnvironment;
           if ((output?.accountId ?? accountId) !== accountId) {
             return { action: "replace" } as const;
           }
@@ -97,6 +97,7 @@ export const QueueProvider = () =>
           }
         }),
         create: Effect.fn(function* ({ id, news = {} }) {
+          const { accountId } = yield* CloudflareEnvironment;
           const queueName = yield* createQueueName(id, news.name);
           const queue = yield* createQueue({
             accountId,
@@ -157,6 +158,7 @@ export const QueueProvider = () =>
               Effect.catch(() => Effect.succeed(undefined)),
             );
           }
+          const { accountId } = yield* CloudflareEnvironment;
           const queueName = yield* createQueueName(id, olds?.name);
           const allQueues = yield* listQueues({ accountId });
           const match = allQueues.result.find((q) => q.queueName === queueName);

@@ -2,6 +2,7 @@ import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as workers from "@distilled.cloud/cloudflare/workers";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { CloudflareEnvironment } from "./CloudflareEnvironment.ts";
 
@@ -127,7 +128,10 @@ export const createEdgeSession = (
 ): Effect.Effect<
   EdgeSessionHandle,
   EdgeSessionError,
-  CloudflareEnvironment | HttpClient.HttpClient | Credentials
+  | CloudflareEnvironment
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | Credentials
 > =>
   Effect.gen(function* () {
     const [{ previewToken }, host] = yield* Effect.all(

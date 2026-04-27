@@ -104,7 +104,6 @@ export const R2BucketProvider = () =>
   Provider.effect(
     R2Bucket,
     Effect.gen(function* () {
-      const { accountId } = yield* CloudflareEnvironment;
       const createBucket = yield* r2.createBucket;
       const patchBucket = yield* r2.patchBucket;
       const deleteBucket = yield* r2.deleteBucket;
@@ -130,6 +129,7 @@ export const R2BucketProvider = () =>
         stables: ["bucketName", "accountId"],
         diff: Effect.fn(function* ({ id, olds = {}, news = {}, output }) {
           if (!isResolved(news)) return undefined;
+          const { accountId } = yield* CloudflareEnvironment;
           const name = yield* createBucketName(id, news.name);
           const oldName = output?.bucketName
             ? output.bucketName
@@ -154,6 +154,7 @@ export const R2BucketProvider = () =>
           }
         }),
         create: Effect.fn(function* ({ id, news = {} }) {
+          const { accountId } = yield* CloudflareEnvironment;
           const name = yield* createBucketName(id, news.name);
           const bucket = yield* createBucket({
             accountId,
@@ -203,7 +204,9 @@ export const R2BucketProvider = () =>
         read: Effect.fn(function* ({ id, output, olds }) {
           const name =
             output?.bucketName ?? (yield* createBucketName(id, olds?.name));
-          const acct = output?.accountId ?? accountId;
+          const acct =
+            output?.accountId ??
+            (yield* CloudflareEnvironment).accountId;
           return yield* getBucket({
             accountId: acct,
             bucketName: name,

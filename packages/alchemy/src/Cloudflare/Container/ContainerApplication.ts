@@ -355,7 +355,6 @@ export const ContainerProvider = () =>
     Container,
     Effect.gen(function* () {
       const stack = yield* Stack;
-      const { accountId } = yield* CloudflareEnvironment;
       const adoptPolicy = yield* Effect.serviceOption(AdoptPolicy).pipe(
         Effect.map(Option.getOrElse(() => false)),
       );
@@ -389,6 +388,7 @@ export const ContainerProvider = () =>
         });
 
       const findApplicationByName = Effect.fnUntraced(function* (name: string) {
+        const { accountId } = yield* CloudflareEnvironment;
         return yield* listContainerApplications({ accountId }).pipe(
           Effect.map((apps) => apps.find((app) => app.name === name)),
         );
@@ -397,6 +397,7 @@ export const ContainerProvider = () =>
       const findApplicationByNamespace = Effect.fnUntraced(function* (
         namespaceId: string,
       ) {
+        const { accountId } = yield* CloudflareEnvironment;
         return yield* listContainerApplications({ accountId }).pipe(
           Effect.map((apps) =>
             apps.find((app) => app.durableObjects?.namespaceId === namespaceId),
@@ -437,6 +438,7 @@ export const ContainerProvider = () =>
             new Error("Container requires a `main` entrypoint."),
           );
         }
+        const { accountId } = yield* CloudflareEnvironment;
         const runtime = props.runtime ?? "bun";
         const { files, hash: bundleHash } = yield* bundleProgram({
           id,
@@ -693,6 +695,7 @@ await Effect.runPromise(serverEffect).catch((err) => {
         }
 
         const registryId = props.registryId ?? "registry.cloudflare.com";
+        const { accountId } = yield* CloudflareEnvironment;
         const credentials = yield* createContainerRegistryCredentials({
           accountId,
           registryId,
@@ -728,6 +731,7 @@ await Effect.runPromise(serverEffect).catch((err) => {
         const stepPercentage =
           strategy === "immediate" ? 100 : (rollout?.stepPercentage ?? 25);
 
+        const { accountId } = yield* CloudflareEnvironment;
         yield* retryForContainerApplicationReadiness(
           "rollout",
           applicationId,
@@ -765,6 +769,7 @@ await Effect.runPromise(serverEffect).catch((err) => {
           | undefined;
         session: { note: (message: string) => Effect.Effect<void> };
       }) {
+        const { accountId } = yield* CloudflareEnvironment;
         const describeError = (error: unknown) => {
           if (error instanceof Error) {
             return JSON.stringify(
@@ -898,6 +903,7 @@ await Effect.runPromise(serverEffect).catch((err) => {
         yield* Effect.logInfo(
           `Cloudflare Container update: preparing ${existing.applicationName}`,
         );
+        const { accountId } = yield* CloudflareEnvironment;
         const { files, imageRef, imageHash } = yield* computeImageHash(
           id,
           news,
@@ -972,6 +978,7 @@ await Effect.runPromise(serverEffect).catch((err) => {
             return undefined;
           }
 
+          const { accountId } = yield* CloudflareEnvironment;
           const name = yield* createApplicationName(id, news.name);
           const oldName = output?.applicationName
             ? output.applicationName

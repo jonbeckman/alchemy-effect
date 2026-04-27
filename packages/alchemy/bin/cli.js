@@ -21,10 +21,9 @@
 //
 // foreground-child forwards stdio + signals and exits with the child's code,
 // so the launcher is transparent to the invoking shell / npm script.
-import { existsSync } from "node:fs";
+import { foregroundChild } from "foreground-child";
 import { createRequire } from "node:module";
 import path from "pathe";
-import { foregroundChild } from "foreground-child";
 
 const require = createRequire(import.meta.url);
 

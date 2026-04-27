@@ -932,7 +932,6 @@ export const WorkerProvider = () =>
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
 
-      const { accountId } = yield* CloudflareEnvironment;
       const virtualEntryPlugin = yield* Bundle.virtualEntryPlugin;
       const stack = yield* Stack;
 
@@ -963,10 +962,13 @@ export const WorkerProvider = () =>
         }).pipe(Effect.map((result) => result.subdomain));
 
       const setWorkerSubdomain = (name: string, enabled: boolean) =>
-        createScriptSubdomain({
-          accountId,
-          scriptName: name,
-          enabled,
+        Effect.gen(function* () {
+          const { accountId } = yield* CloudflareEnvironment;
+          return yield* createScriptSubdomain({
+            accountId,
+            scriptName: name,
+            enabled,
+          });
         });
 
       const createWorkerName = (id: string, name: string | undefined) =>
@@ -1027,6 +1029,7 @@ export const WorkerProvider = () =>
         previous: Worker["Attributes"]["domains"],
       ) =>
         Effect.gen(function* () {
+          const { accountId } = yield* CloudflareEnvironment;
           const desiredSet = new Set(desired);
           const toRemove = previous.filter((p) => !desiredSet.has(p.hostname));
           yield* Effect.all(
@@ -1112,6 +1115,7 @@ export const WorkerProvider = () =>
         scriptName: string,
         expectedClassNames: readonly string[],
       ) {
+        const { accountId } = yield* CloudflareEnvironment;
         return yield* getScriptSettings({
           accountId,
           scriptName,
@@ -1478,6 +1482,7 @@ ${[
         session: ScopedPlanStatusSession,
         existingSettings?: workers.GetScriptScriptAndVersionSettingResponse,
       ) {
+        const { accountId } = yield* CloudflareEnvironment;
         const name = yield* createWorkerName(id, news.name);
         yield* Effect.logInfo(
           `Cloudflare Worker ${olds ? "update" : "create"}: preparing bundle for ${name}`,
@@ -1832,6 +1837,7 @@ ${[
         stables: ["workerId", "workerName"],
         diff: Effect.fnUntraced(function* ({ id, news, olds, output }) {
           if (!isResolved(news)) return undefined;
+          const { accountId } = yield* CloudflareEnvironment;
           if ((output?.accountId ?? accountId) !== accountId) {
             return { action: "replace" };
           }
@@ -1861,6 +1867,7 @@ ${[
           }
         }),
         precreate: Effect.fnUntraced(function* ({ id, news, session }) {
+          const { accountId } = yield* CloudflareEnvironment;
           const name = yield* createWorkerName(id, news.name);
           const exportMap = (news.exports ?? {}) as Record<string, unknown>;
           const durableObjects = Object.keys(exportMap)
@@ -1984,6 +1991,7 @@ ${[
         }),
         read: Effect.fnUntraced(
           function* ({ id, output, olds }) {
+            const { accountId } = yield* CloudflareEnvironment;
             const workerName =
               output?.workerName ?? (yield* createWorkerName(id, olds?.name));
             yield* Effect.logInfo(
@@ -2053,6 +2061,7 @@ ${[
           output,
           session,
         }) {
+          const { accountId } = yield* CloudflareEnvironment;
           const name = yield* createWorkerName(id, news.name);
           const durableObjects = getDurableObjectBindings(bindings, name).map(
             ({ logicalId, className }) => ({

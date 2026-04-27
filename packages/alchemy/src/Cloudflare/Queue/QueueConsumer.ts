@@ -101,7 +101,6 @@ export const QueueConsumerProvider = () =>
   Provider.effect(
     QueueConsumer,
     Effect.gen(function* () {
-      const { accountId } = yield* CloudflareEnvironment;
       const createConsumer = yield* queues.createConsumer;
       const getConsumer = yield* queues.getConsumer;
       const updateConsumer = yield* queues.updateConsumer;
@@ -112,6 +111,7 @@ export const QueueConsumerProvider = () =>
         stables: ["consumerId", "accountId"],
         diff: Effect.fn(function* ({ olds, news, output }) {
           if (!isResolved(news)) return undefined;
+          const { accountId } = yield* CloudflareEnvironment;
           if ((output?.accountId ?? accountId) !== accountId) {
             return { action: "replace" } as const;
           }
@@ -132,6 +132,7 @@ export const QueueConsumerProvider = () =>
           }
         }),
         create: Effect.fn(function* ({ news }) {
+          const { accountId } = yield* CloudflareEnvironment;
           const consumer = yield* createConsumer({
             accountId,
             queueId: news.queueId!,
