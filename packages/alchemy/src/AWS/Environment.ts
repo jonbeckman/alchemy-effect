@@ -11,6 +11,13 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { getAuthProvider } from "../Auth/AuthProvider.ts";
+import { ALCHEMY_PROFILE, getProfile } from "../Auth/Profile.ts";
+import {
+  AWS_AUTH_PROVIDER_NAME,
+  type AwsAuthConfig,
+  type AwsResolvedCredentials,
+} from "./AuthProvider.ts";
 
 export const AWS_PROFILE = Config.string("AWS_PROFILE").pipe(
   Config.withDefault("default"),
@@ -52,9 +59,13 @@ export class AWSEnvironment extends Context.Service<
 >()("AWS::Environment") {}
 
 /**
- * Build an `AWSEnvironment` from an SSO profile (`AWS_PROFILE` env var,
- * defaults to `"default"`). Uses the profile's `sso_account_id` and `region`,
- * and resolves credentials lazily via `aws sso login`.
+ * Build an `AWSEnvironment` for the active `ALCHEMY_PROFILE`. Driven by the
+ * persisted {@link AwsAuthConfig} (`{ method: "env" | "stored" | "sso" }`)
+ * recorded by `alchemy login --provider AWS --configure`.
+ *
+ * Falls back to the legacy `AWS_PROFILE`-based SSO loader if no Alchemy AWS
+ * config is registered for the current profile (preserves the
+ * "drop-in SSO without `alchemy login`" UX).
  */
 export const Default = Layer.effect(
   AWSEnvironment,
@@ -63,27 +74,72 @@ export const Default = Layer.effect(
 
 export const loadDefault = () =>
   Effect.gen(function* () {
-    const profileName = yield* AWS_PROFILE;
-    const auth = yield* Auth.Default;
-    const profile = yield* auth.loadProfile(profileName);
-    if (!profile.sso_account_id) {
-      return yield* Effect.die(
-        `AWS SSO profile '${profileName}' is missing sso_account_id`,
-      );
+    const fromAuth = yield* loadFromAuth().pipe(
+      Effect.catch(() => Effect.succeed(undefined)),
+    );
+    if (fromAuth) return fromAuth;
+    return yield* loadFromAwsProfile();
+  });
+
+const loadFromAuth = () =>
+  Effect.gen(function* () {
+    const profileName = yield* ALCHEMY_PROFILE;
+    const auth = yield* getAuthProvider<AwsAuthConfig, AwsResolvedCredentials>(
+      AWS_AUTH_PROVIDER_NAME,
+    );
+    const profile = yield* getProfile(profileName);
+    const cfg = profile?.[AWS_AUTH_PROVIDER_NAME] as AwsAuthConfig | undefined;
+    if (!cfg) return undefined;
+
+    if (cfg.method === "sso") {
+      return yield* loadFromSso(cfg.ssoProfile);
     }
-    const region =
-      profile.region ??
-      (yield* AWS_REGION.pipe(
-        Config.option,
-        Config.map(Option.getOrElse(() => "us-east-1")),
-      ));
+
+    const resolved = yield* auth.read(profileName, cfg);
+    const region = yield* resolveRegion(resolved.region);
     return {
       profile: profileName,
-      accountId: profile.sso_account_id,
+      accountId: cfg.accountId,
       region,
-      credentials: auth.loadProfileCredentials(profileName),
+      credentials: Effect.succeed<ResolvedCredentials>({
+        accessKeyId: resolved.accessKeyId,
+        secretAccessKey: resolved.secretAccessKey,
+        sessionToken: resolved.sessionToken,
+      }),
     } satisfies AWSEnvironmentShape;
   });
+
+const loadFromAwsProfile = () =>
+  Effect.gen(function* () {
+    const profileName = yield* AWS_PROFILE;
+    return yield* loadFromSso(profileName);
+  });
+
+const loadFromSso = (ssoProfile: string) =>
+  Effect.gen(function* () {
+    const auth = yield* Auth.Default;
+    const profile = yield* auth.loadProfile(ssoProfile);
+    if (!profile.sso_account_id) {
+      return yield* Effect.die(
+        `AWS SSO profile '${ssoProfile}' is missing sso_account_id`,
+      );
+    }
+    const region = yield* resolveRegion(profile.region);
+    return {
+      profile: ssoProfile,
+      accountId: profile.sso_account_id,
+      region,
+      credentials: auth.loadProfileCredentials(ssoProfile),
+    } satisfies AWSEnvironmentShape;
+  });
+
+const resolveRegion = (preferred: string | undefined) =>
+  preferred != null
+    ? Effect.succeed(preferred)
+    : AWS_REGION.pipe(
+        Config.option,
+        Config.map(Option.getOrElse(() => "us-east-1")),
+      );
 
 export interface AWSEnvironmentStaticInput {
   accountId: AccountID;

@@ -11,7 +11,6 @@ import { TelemetryLive } from "../src/Telemetry/Layer.ts";
 import { PlatformServices, runMain } from "../src/Util/PlatformServices.ts";
 
 import { handleCancellation } from "./commands/_shared.ts";
-import { bootstrapCommand } from "./commands/bootstrap.ts";
 import {
   deployCommand,
   destroyCommand,
@@ -25,7 +24,6 @@ import { tailCommand } from "./commands/tail.ts";
 
 const root = Command.make("alchemy", {}).pipe(
   Command.withSubcommands([
-    bootstrapCommand,
     deployCommand,
     destroyCommand,
     planCommand,

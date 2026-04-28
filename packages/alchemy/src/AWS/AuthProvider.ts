@@ -1,4 +1,10 @@
 import * as DistilledAuth from "@distilled.cloud/aws/Auth";
+import {
+  Credentials as DistilledCredentials,
+  type ResolvedCredentials,
+} from "@distilled.cloud/aws/Credentials";
+import * as DistilledRegion from "@distilled.cloud/aws/Region";
+import * as STS from "@distilled.cloud/aws/sts";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -47,8 +53,8 @@ export const AwsAuth = AuthProviderLayer<
 
 export type AwsAuthConfig =
   | { method: "sso"; ssoProfile: string }
-  | { method: "stored" }
-  | { method: "env" };
+  | { method: "stored"; accountId: string }
+  | { method: "env"; accountId: string };
 
 const options: Array<{
   value: AwsAuthConfig["method"];
@@ -302,7 +308,8 @@ const login = (profileName: string, config: AwsAuthConfig) =>
 const configureCredentials = (profileName: string, ctx: ConfigureContext) =>
   Effect.gen(function* () {
     if (ctx.ci) {
-      return { method: "env" as const };
+      const accountId = yield* resolveAccountIdFromMethod(profileName, "env");
+      return { method: "env" as const, accountId };
     }
     return yield* configureInteractive(profileName);
   }).pipe(
@@ -322,7 +329,15 @@ const configureInteractive = (profileName: string) =>
   }).pipe(
     Effect.flatMap((method) =>
       Match.value(method).pipe(
-        Match.when("env", () => Effect.succeed({ method: "env" as const })),
+        Match.when("env", () =>
+          Effect.gen(function* () {
+            const accountId = yield* resolveAccountIdFromMethod(
+              profileName,
+              "env",
+            );
+            return { method: "env" as const, accountId };
+          }),
+        ),
         Match.when("sso", () =>
           Effect.gen(function* () {
             const ssoProfile = yield* Clank.text({
@@ -344,6 +359,65 @@ const configureInteractive = (profileName: string) =>
         Match.when("stored", () => loginStored(profileName)),
         Match.exhaustive,
       ),
+    ),
+  );
+
+/**
+ * Resolve the AWS account id once at configure time so it can be persisted
+ * in `~/.alchemy/profiles.json` alongside the auth method. Drives a single
+ * `STS:GetCallerIdentity` call against the just-resolved credentials so
+ * `AWSEnvironment.loadDefault` doesn't need to talk to STS on every plan.
+ */
+const resolveAccountIdFromMethod = (
+  profileName: string,
+  method: "env" | "stored",
+) =>
+  Effect.gen(function* () {
+    // Build a minimal config (no accountId yet) so `resolveCredentials` can
+    // produce credentials; the resolver doesn't read accountId for these
+    // methods.
+    const placeholder =
+      method === "env"
+        ? ({ method: "env" as const, accountId: "" } satisfies AwsAuthConfig)
+        : ({ method: "stored" as const, accountId: "" } satisfies AwsAuthConfig);
+    const creds = yield* resolveCredentials(profileName, placeholder);
+    const region = creds.region ?? "us-east-1";
+    return yield* getCallerAccountId(
+      {
+        accessKeyId: creds.accessKeyId,
+        secretAccessKey: creds.secretAccessKey,
+        sessionToken: creds.sessionToken,
+      },
+      region,
+    );
+  });
+
+export const getCallerAccountId = (
+  creds: ResolvedCredentials,
+  region: string,
+) =>
+  STS.getCallerIdentity({}).pipe(
+    Effect.provideService(DistilledCredentials, Effect.succeed(creds)),
+    Effect.provideService(DistilledRegion.Region, region),
+    Effect.flatMap((r) =>
+      r.Account
+        ? Effect.succeed(r.Account)
+        : Effect.fail(
+            new AuthError({
+              message: "STS GetCallerIdentity did not return an Account",
+            }),
+          ),
+    ),
+    Effect.catch((e) =>
+      e instanceof AuthError
+        ? Effect.fail(e)
+        : Effect.fail(
+            new AuthError({
+              message:
+                "Failed to resolve AWS account id via STS GetCallerIdentity",
+              cause: e,
+            }),
+          ),
     ),
   );
 
@@ -388,5 +462,6 @@ const loginStored = Effect.fnUntraced(function* (profileName: string) {
   });
   yield* Clank.success("AWS credentials saved.");
 
-  return { method: "stored" as const };
+  const accountId = yield* resolveAccountIdFromMethod(profileName, "stored");
+  return { method: "stored" as const, accountId };
 });
