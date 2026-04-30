@@ -46,19 +46,15 @@ const useTs = !(
 // .ts only runs under bun. Force bun in dev even if node was the invoker.
 const runtime = useTs || invokedByBun ? "bun" : "node";
 
-const args = [];
-
-if (runtime === "bun" && useTs) {
-  // Pin bun's tsconfig to alchemy's, not whatever happens to be in the
-  // invoking workspace's cwd. Bun's default is `$cwd/tsconfig.json`, which
-  // means invoking `alchemy` from e.g. `examples/cloudflare-solidstart`
-  // would transpile alchemy's own .tsx files with that example's JSX
-  // settings (jsx: "preserve", jsxImportSource: "solid-js"), breaking the
-  // React files inside the alchemy CLI.
-  args.push(`--tsconfig-override=${path.join(binDir, "..", "tsconfig.json")}`);
-}
-
-args.push(useTs ? tsEntry : jsEntry, ...process.argv.slice(2));
+// We deliberately do NOT pass `--tsconfig-override` here. Bun resolves
+// tsconfig per source file by walking up from the file's directory, so
+// alchemy's own .ts/.tsx sources pick up alchemy's tsconfig.json on their
+// own — even when invoked from a workspace whose own tsconfig has
+// incompatible JSX settings (e.g. examples/cloudflare-solidstart).
+// Passing `--tsconfig-override` triggers a known bun bug that prints
+// `Internal error: directory mismatch for directory ".../tsconfig.json"`
+// to stderr on every invocation (see oven-sh/bun#22023, #26793).
+const args = [useTs ? tsEntry : jsEntry, ...process.argv.slice(2)];
 
 process.on("uncaughtException", (error) => {
   if (
