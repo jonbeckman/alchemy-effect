@@ -1,0 +1,34 @@
+import * as AWS from "@/AWS";
+import * as Test from "@/Test/Vitest";
+import * as ag from "@distilled.cloud/aws/api-gateway";
+import { expect } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+
+const { test } = Test.make({ providers: AWS.providers() });
+
+test.provider("create and delete API Gateway resource", (stack) =>
+  Effect.gen(function* () {
+    const { api, res } = yield* stack.deploy(
+      Effect.gen(function* () {
+        const api = yield* AWS.ApiGateway.RestApi("AgResApi", {
+          name: "alchemy-test-ag-resource",
+          endpointConfiguration: { types: ["REGIONAL"] },
+        });
+        const res = yield* AWS.ApiGateway.Resource("AgSubPath", {
+          restApiId: api.restApiId,
+          parentId: api.rootResourceId,
+          pathPart: "items",
+        });
+        return { api, res };
+      }),
+    );
+
+    const remote = yield* ag.getResource({
+      restApiId: api.restApiId,
+      resourceId: res.resourceId,
+    });
+    expect(remote.pathPart).toEqual("items");
+
+    yield* stack.destroy();
+  }),
+);

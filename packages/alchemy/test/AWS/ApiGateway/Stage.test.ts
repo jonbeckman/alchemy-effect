@@ -1,0 +1,179 @@
+import * as AWS from "@/AWS";
+import * as Test from "@/Test/Vitest";
+import * as ag from "@distilled.cloud/aws/api-gateway";
+import { expect } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+
+const { test } = Test.make({ providers: AWS.providers() });
+
+test.provider("create and delete stage", (stack) =>
+  Effect.gen(function* () {
+    const { stage } = yield* stack.deploy(
+      Effect.gen(function* () {
+        const api = yield* AWS.ApiGateway.RestApi("AgStageApi", {
+          name: "alchemy-test-ag-stage",
+          endpointConfiguration: { types: ["REGIONAL"] },
+        });
+        yield* AWS.ApiGateway.Method("AgStageMock", {
+          restApiId: api.restApiId,
+          resourceId: api.rootResourceId,
+          httpMethod: "GET",
+          authorizationType: "NONE",
+          integration: { type: "MOCK" },
+        });
+        const deployment = yield* AWS.ApiGateway.Deployment("AgStageDep", {
+          restApiId: api.restApiId,
+        });
+        const stage = yield* AWS.ApiGateway.Stage("AgStageDev", {
+          restApiId: api.restApiId,
+          stageName: "dev",
+          deploymentId: deployment.deploymentId,
+        });
+        return { stage };
+      }),
+    );
+
+    expect(stage.stageName).toEqual("dev");
+
+    yield* stack.destroy();
+  }),
+);
+
+test.provider("stage variables update in place", (stack) =>
+  Effect.gen(function* () {
+    const { api, deployment } = yield* stack.deploy(
+      Effect.gen(function* () {
+        const api = yield* AWS.ApiGateway.RestApi("AgStageVarApi", {
+          name: "alchemy-test-ag-stage-vars",
+          endpointConfiguration: { types: ["REGIONAL"] },
+        });
+        yield* AWS.ApiGateway.Method("AgStageVarMock", {
+          restApiId: api.restApiId,
+          resourceId: api.rootResourceId,
+          httpMethod: "GET",
+          authorizationType: "NONE",
+          integration: { type: "MOCK" },
+        });
+        const deployment = yield* AWS.ApiGateway.Deployment("AgStageVarDep", {
+          restApiId: api.restApiId,
+        });
+        const stage = yield* AWS.ApiGateway.Stage("AgStageVar", {
+          restApiId: api.restApiId,
+          stageName: "dev",
+          deploymentId: deployment.deploymentId,
+          variables: { K: "1" },
+        });
+        return { api, stage, deployment };
+      }),
+    );
+
+    yield* stack.deploy(
+      Effect.gen(function* () {
+        const api = yield* AWS.ApiGateway.RestApi("AgStageVarApi", {
+          name: "alchemy-test-ag-stage-vars",
+          endpointConfiguration: { types: ["REGIONAL"] },
+        });
+        yield* AWS.ApiGateway.Method("AgStageVarMock", {
+          restApiId: api.restApiId,
+          resourceId: api.rootResourceId,
+          httpMethod: "GET",
+          authorizationType: "NONE",
+          integration: { type: "MOCK" },
+        });
+        const deployment = yield* AWS.ApiGateway.Deployment("AgStageVarDep", {
+          restApiId: api.restApiId,
+        });
+        yield* AWS.ApiGateway.Stage("AgStageVar", {
+          restApiId: api.restApiId,
+          stageName: "dev",
+          deploymentId: deployment.deploymentId,
+          variables: { K: "2" },
+        });
+        return undefined;
+      }),
+    );
+
+    const remote = yield* ag.getStage({
+      restApiId: api.restApiId,
+      stageName: "dev",
+    });
+    expect(remote.variables?.K).toEqual("2");
+
+    yield* stack.destroy();
+  }),
+);
+
+test.provider("stage method settings update in place", (stack) =>
+  Effect.gen(function* () {
+    const { api } = yield* stack.deploy(
+      Effect.gen(function* () {
+        const api = yield* AWS.ApiGateway.RestApi("AgStageMethodApi", {
+          name: "alchemy-test-ag-stage-method",
+          endpointConfiguration: { types: ["REGIONAL"] },
+        });
+        yield* AWS.ApiGateway.Method("AgStageMethodMock", {
+          restApiId: api.restApiId,
+          resourceId: api.rootResourceId,
+          httpMethod: "GET",
+          authorizationType: "NONE",
+          integration: { type: "MOCK" },
+        });
+        const deployment = yield* AWS.ApiGateway.Deployment(
+          "AgStageMethodDep",
+          {
+            restApiId: api.restApiId,
+          },
+        );
+        yield* AWS.ApiGateway.Stage("AgStageMethod", {
+          restApiId: api.restApiId,
+          stageName: "dev",
+          deploymentId: deployment.deploymentId,
+          methodSettings: {
+            "*/*": { throttlingBurstLimit: 10, throttlingRateLimit: 100 },
+          },
+        });
+        return { api };
+      }),
+    );
+
+    yield* stack.deploy(
+      Effect.gen(function* () {
+        const api = yield* AWS.ApiGateway.RestApi("AgStageMethodApi", {
+          name: "alchemy-test-ag-stage-method",
+          endpointConfiguration: { types: ["REGIONAL"] },
+        });
+        yield* AWS.ApiGateway.Method("AgStageMethodMock", {
+          restApiId: api.restApiId,
+          resourceId: api.rootResourceId,
+          httpMethod: "GET",
+          authorizationType: "NONE",
+          integration: { type: "MOCK" },
+        });
+        const deployment = yield* AWS.ApiGateway.Deployment(
+          "AgStageMethodDep",
+          {
+            restApiId: api.restApiId,
+          },
+        );
+        yield* AWS.ApiGateway.Stage("AgStageMethod", {
+          restApiId: api.restApiId,
+          stageName: "dev",
+          deploymentId: deployment.deploymentId,
+          methodSettings: {
+            "*/*": { throttlingBurstLimit: 20, throttlingRateLimit: 200 },
+          },
+        });
+        return undefined;
+      }),
+    );
+
+    const remote = yield* ag.getStage({
+      restApiId: api.restApiId,
+      stageName: "dev",
+    });
+    expect(remote.methodSettings?.["*/*"]?.throttlingBurstLimit).toEqual(20);
+    expect(remote.methodSettings?.["*/*"]?.throttlingRateLimit).toEqual(200);
+
+    yield* stack.destroy();
+  }),
+);

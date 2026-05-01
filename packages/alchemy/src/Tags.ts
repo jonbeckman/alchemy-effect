@@ -7,7 +7,7 @@ export type Tags =
   | [string, string][]
   | { Key: string; Value: string }[];
 
-const normalizeTags = (tags: Tags) =>
+export const normalizeTags = (tags: Tags) =>
   Array.isArray(tags)
     ? Object.fromEntries(
         tags.map((tag) =>
