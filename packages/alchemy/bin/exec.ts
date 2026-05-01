@@ -19,4 +19,12 @@ const options = Schema.decodeSync(ExecStackOptions)(
   JSON.parse(process.env.ALCHEMY_EXEC_OPTIONS!),
 );
 
+// Propagate the resolved profile to spawned subprocesses (e.g. the
+// Cloudflare local-runtime sidecar) via env so they see the same
+// profile selection. ConfigProvider's `withProfileOverride` only
+// applies to this Effect runtime, not to children.
+if (options.profile && !process.env.ALCHEMY_PROFILE) {
+  process.env.ALCHEMY_PROFILE = options.profile;
+}
+
 execStack(options).pipe(Effect.provide(services), Effect.scoped, runMain);

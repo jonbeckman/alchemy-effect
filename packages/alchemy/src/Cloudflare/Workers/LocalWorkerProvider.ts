@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
+import * as path from "node:path";
 import * as Provider from "../../Provider.ts";
 import type { ResourceBinding } from "../../Resource.ts";
 import { Stack } from "../../Stack.ts";
@@ -48,29 +49,37 @@ export const LocalWorkerProvider = () =>
             });
           }
         }
-        const result = yield* sidecar.serve({
-          id,
-          name,
-          main: props.main,
-          compatibility: getCompatibility(props),
-          entry: props.isExternal
-            ? {
-                kind: "external",
-              }
-            : {
-                kind: "effect",
-                exports: (props.exports ?? {}) as any,
-              },
-          stack: { name: stack.name, stage: stack.stage },
-          bindings: workerBindings,
-          durableObjectNamespaces: Object.entries(durableObjectNamespaces).map(
-            ([className, namespaceId]) => ({
-              className,
-              uniqueKey: namespaceId,
-              sql: true,
-            }),
-          ),
-        });
+        const dons = Object.entries(durableObjectNamespaces).map(
+          ([className, namespaceId]) => ({
+            className,
+            uniqueKey: namespaceId,
+            sql: true,
+          }),
+        );
+        const result = props.vite
+          ? yield* sidecar.serveVite({
+              id,
+              name,
+              rootDir: props.vite.rootDir ?? path.resolve(process.cwd()),
+              compatibility: getCompatibility(props),
+              bindings: workerBindings,
+              durableObjectNamespaces: dons,
+            })
+          : yield* sidecar.serve({
+              id,
+              name,
+              main: props.main,
+              compatibility: getCompatibility(props),
+              entry: props.isExternal
+                ? { kind: "external" }
+                : {
+                    kind: "effect",
+                    exports: (props.exports ?? {}) as any,
+                  },
+              stack: { name: stack.name, stage: stack.stage },
+              bindings: workerBindings,
+              durableObjectNamespaces: dons,
+            });
         return {
           workerId: name,
           workerName: name,

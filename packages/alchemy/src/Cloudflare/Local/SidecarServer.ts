@@ -5,6 +5,7 @@ import * as Path from "effect/Path";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as AlchemyContext from "../../AlchemyContext.ts";
 import { AuthProviders } from "../../Auth/AuthProvider.ts";
+import { LockError } from "../../Sidecar/Lock.ts";
 import * as RpcServer from "../../Sidecar/RpcServer.ts";
 import {
   httpServer,
@@ -51,6 +52,14 @@ const services = Layer.provideMerge(
 );
 
 RpcServer.makeRpcServer(Sidecar.asEffect(), SidecarSchema).pipe(
+  // If another sidecar already holds the lock (typically a `bun --watch`
+  // reload race during dev), exit silently with code 0. The parent RPC
+  // client retries until the canonical sidecar's URL file appears, so a
+  // failed loser process printing a stack trace would just be noise.
+  Effect.catchIf(
+    (e): e is LockError => e instanceof LockError && e.reason === "Conflict",
+    () => Effect.sync(() => process.exit(0)),
+  ),
   Effect.provide(services),
   Effect.scoped,
   runMain,

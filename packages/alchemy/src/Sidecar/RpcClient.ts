@@ -70,10 +70,15 @@ const maybeStartRpcServer = Effect.fn(function* (main: string) {
   const lock = yield* Lock.Lock;
   if (!(yield* lock.check)) {
     yield* Effect.logDebug("[RpcClient] Starting RPC server", main);
+    // Effect's `ChildProcess.make` defaults `detached` to `true` on
+    // POSIX and `false` on Windows, which is exactly what we need:
+    // POSIX sidecar outlives bun --watch reloads (so `serveVite`'s
+    // hash cache reuses Vite); Windows sidecar shares the dev
+    // process's console (Bun on Windows allocates a new console for
+    // detached children regardless of `windowsHide` or `stdio`).
     yield* ChildProcess.make("bun", ["run", main], {
       stdout: "inherit",
       stderr: "inherit",
-      detached: true,
     });
   } else {
     yield* Effect.logDebug("[RpcClient] RPC server already running", main);

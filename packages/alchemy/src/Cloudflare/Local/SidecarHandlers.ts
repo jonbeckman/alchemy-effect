@@ -10,18 +10,30 @@ import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as LocalProxy from "@distilled.cloud/cloudflare-runtime/proxy/LocalProxy";
 import * as Bundle from "../../Bundle/Bundle.ts";
 import { WorkerBundle } from "../Workers/WorkerBundle.ts";
-import { Sidecar, type ServeOptions } from "./Sidecar.ts";
+import { Sidecar, type ServeOptions, type ServeViteOptions } from "./Sidecar.ts";
+import * as ViteDev from "./Vite/ViteDev.ts";
+import * as FrontProxy from "./Vite/FrontProxy.ts";
 
 export const SidecarHandlers = Layer.effect(
   Sidecar,
   Effect.gen(function* () {
     const bundle = yield* WorkerBundle;
     const server = yield* Server.Server;
+    const localProxy = yield* LocalProxy.LocalProxy;
 
     const rootScope = yield* Effect.scope;
     const serverScopes = new Map<string, Scope.Closeable>();
+    const viteServers = new Map<
+      string,
+      {
+        hash: number;
+        scope: Scope.Closeable;
+        result: { name: string; address: string };
+      }
+    >();
 
     const serveScoped = Effect.fnUntraced(function* (
       worker: ServeOptions,
@@ -118,6 +130,69 @@ export const SidecarHandlers = Layer.effect(
       return yield* Deferred.await(result);
     });
 
+    const serveViteImpl = Effect.fnUntraced(function* (
+      options: ServeViteOptions,
+    ) {
+      const dev = yield* ViteDev.start({ rootDir: options.rootDir });
+      yield* Effect.log(
+        `[${options.id}] Vite dev started (ssr=${dev.hasSsr}, control=${dev.controlAddress})`,
+      );
+
+      let workerdAddress: string | undefined;
+
+      if (dev.hasSsr) {
+        // SSR runner-mode HMR (workerd host worker + worker_loader +
+        // service binding back to Vite for module fetches) is wired up
+        // in HostWorker.ts and ModuleSnapshot.ts but the sidecar-side
+        // provisioning is gated behind exposing Runtime + Bindings from
+        // cloudflare-runtime/RuntimeServices. Until that lands we fall
+        // through to the SPA path; SSR projects will surface as 502 from
+        // the front proxy because there's no workerd to forward to.
+        yield* Effect.logWarning(
+          `[${options.id}] SSR detected but runner-mode HMR is not yet wired; serving via Vite only`,
+        );
+      }
+
+      const front = yield* FrontProxy.start({ dev, workerdAddress });
+      yield* Effect.log(
+        `[${options.id}] Vite front-proxy listening at ${front.address}`,
+      );
+
+      const proxyRegistered = yield* localProxy
+        .send({
+          _tag: "Local.Set",
+          worker: options.name,
+          address: front.address,
+        })
+        .pipe(
+          Effect.as(true),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `[${options.id}] Could not register with LocalProxy (workerd subdomain routing unavailable); raw front-proxy address will be exposed instead`,
+              cause as any,
+            ).pipe(Effect.as(false)),
+          ),
+        );
+      if (proxyRegistered) {
+        yield* Effect.addFinalizer(() =>
+          localProxy
+            .send({
+              _tag: "Local.Unset",
+              worker: options.name,
+              address: front.address,
+            })
+            .pipe(Effect.ignore),
+        );
+      }
+
+      return {
+        name: options.name,
+        address: proxyRegistered
+          ? `http://${options.name}.${localProxy.address}`
+          : front.address,
+      };
+    });
+
     return Sidecar.of({
       serve: Effect.fn(function* (worker: ServeOptions) {
         const hash = Hash.structure(worker);
@@ -152,12 +227,51 @@ export const SidecarHandlers = Layer.effect(
           ),
         );
       }),
+      serveVite: Effect.fn(function* (options: ServeViteOptions) {
+        // Hash the inputs that actually affect Vite/workerd state so a
+        // bun --watch reload of `alchemy.run.ts` (which re-issues this
+        // RPC) reuses the live Vite server when nothing material has
+        // changed. Keeps the browser's HMR socket connected across
+        // alchemy code edits.
+        const hash = Hash.structure({
+          rootDir: options.rootDir,
+          compatibility: options.compatibility,
+          bindings: options.bindings,
+          durableObjectNamespaces: options.durableObjectNamespaces,
+        });
+        const existing = viteServers.get(options.name);
+        if (existing) {
+          if (existing.hash === hash) {
+            yield* Effect.log(
+              `[${options.id}] Reusing existing Vite dev server`,
+            );
+            return existing.result;
+          }
+          yield* Effect.log(
+            `[${options.id}] Vite config changed, restarting`,
+          );
+          yield* Scope.close(existing.scope, Exit.void);
+          viteServers.delete(options.name);
+        }
+        const scope = yield* Scope.fork(rootScope);
+        const result = yield* serveViteImpl(options).pipe(
+          Scope.provide(scope),
+          Effect.tapCause(() => Scope.close(scope, Exit.void)),
+        );
+        viteServers.set(options.name, { hash, scope, result });
+        return result;
+      }),
       stop: Effect.fn(function* (name: string) {
         const watcher = watchers.get(name);
         if (watcher) {
           yield* Fiber.interrupt(watcher.fiber);
           yield* Scope.close(watcher.scope, Exit.void);
           watchers.delete(name);
+        }
+        const viteEntry = viteServers.get(name);
+        if (viteEntry) {
+          yield* Scope.close(viteEntry.scope, Exit.void);
+          viteServers.delete(name);
         }
       }),
     });

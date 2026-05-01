@@ -143,24 +143,62 @@ const make = Effect.gen(function* () {
 
   const releaseLock = assertOwnLock.pipe(Effect.andThen(() => removeLock));
 
-  const acquireLock = makeLockFile.pipe(
+  // When `bun --watch` reloads the dev process, the new sidecar can
+  // race with the old one's shutdown — the old one is still holding
+  // the lock for a few hundred ms while finalizers run. Each attempt
+  // re-checks `isLockValid` so a stale (process-dead) file is removed
+  // immediately; only a still-valid lock causes a delayed retry. Bound
+  // to ~3 s total so a genuinely-held lock surfaces eventually.
+  const acquireLock: Effect.Effect<void, LockError> = makeLockFile.pipe(
     Effect.catchIf(
       (e) => e.reason === "Conflict",
       (e) =>
         isLockValid.pipe(
           Effect.flatMap((valid) =>
             valid
-              ? Effect.fail(e)
+              ? Effect.sleep(Duration.millis(150)).pipe(
+                  Effect.andThen(() => acquireLockBounded(20, e)),
+                )
               : removeLock.pipe(Effect.andThen(() => makeLockFile)),
           ),
         ),
     ),
   );
 
+  function acquireLockBounded(
+    attemptsLeft: number,
+    lastError: LockError,
+  ): Effect.Effect<void, LockError> {
+    if (attemptsLeft <= 0) return Effect.fail(lastError);
+    return makeLockFile.pipe(
+      Effect.catchIf(
+        (e) => e.reason === "Conflict",
+        (e) =>
+          isLockValid.pipe(
+            Effect.flatMap((valid) =>
+              valid
+                ? Effect.sleep(Duration.millis(150)).pipe(
+                    Effect.andThen(() =>
+                      acquireLockBounded(attemptsLeft - 1, e),
+                    ),
+                  )
+                : removeLock.pipe(Effect.andThen(() => makeLockFile)),
+            ),
+          ),
+      ),
+    );
+  }
+
   const touchLock = assertOwnLock.pipe(
     Effect.flatMap(() => {
-      const now = Date.now();
-      return fs.utimes(paths.lock, now, now).pipe(
+      // `fs.utimes` accepts `Date | number`. Bun on Windows rejects
+      // millisecond-since-epoch numbers (~1.7e12) with EINVAL because
+      // its FFI layer treats them as seconds and overflows. macOS and
+      // Linux happily accept the number form, so keep that path on
+      // POSIX and only switch to the `Date` form on Windows.
+      const ts =
+        process.platform === "win32" ? new Date() : Date.now();
+      return fs.utimes(paths.lock, ts, ts).pipe(
         Effect.mapError(
           (e) =>
             new LockError({
