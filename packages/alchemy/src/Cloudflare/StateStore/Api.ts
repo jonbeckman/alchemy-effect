@@ -33,13 +33,23 @@ export const STATE_STORE_SCRIPT_NAME = "alchemy-state-store" as const;
  *
  * In the bundled case, fall back to the published source file shipped
  * alongside the CLI under `../src/Cloudflare/StateStore/Api.ts`.
+ *
+ * Guarded with try/catch because this same module is also evaluated by
+ * the Cloudflare Workers runtime once the bundle is deployed, where
+ * `import.meta.url` may be missing or use a non-`file:` scheme. The
+ * resolved path is only consumed at bundle-time by the alchemy CLI; the
+ * worker runtime never reads it, so an empty fallback is safe.
  */
 const API_SOURCE_PATH = (() => {
-  const here = fileURLToPath(import.meta.url);
-  if (here.endsWith(".ts")) return here;
-  return fileURLToPath(
-    new URL("../src/Cloudflare/StateStore/Api.ts", import.meta.url),
-  );
+  try {
+    const here = fileURLToPath(import.meta.url);
+    if (here.endsWith(".ts")) return here;
+    return fileURLToPath(
+      new URL("../src/Cloudflare/StateStore/Api.ts", import.meta.url),
+    );
+  } catch {
+    return "";
+  }
 })();
 
 export default Worker(
