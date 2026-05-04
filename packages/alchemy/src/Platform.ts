@@ -11,6 +11,7 @@ import {
   ExecutionContext,
   type BaseExecutionContext,
 } from "./ExecutionContext.ts";
+import { FACTORY_MARKER, makeFactory } from "./Factory.ts";
 import type { HttpEffect } from "./Http.ts";
 import type { InputProps } from "./Input.ts";
 import type { Provider, ProviderCollectionLike } from "./Provider.ts";
@@ -169,6 +170,18 @@ export interface Platform<
     | PropsReq
     | Exclude<InitReq, Services | PlatformServices>
   >;
+  /**
+   * Factory form. The user's `export default Worker((args) => Worker(...))`
+   * is the wrapped function; deploy-side calls invoke the inner
+   * Effect and persist `args` into the Worker's env, and the runtime
+   * entrypoint re-applies them after import.
+   */
+  <Args extends readonly unknown[], R, Req = never>(
+    factory: (...args: Args) => Effect.Effect<R, never, Req>,
+  ): ((...args: Args) => Effect.Effect<R, never, Req>) & {
+    readonly [FACTORY_MARKER]: true;
+    readonly Type: Resource["Type"];
+  };
 }
 
 type MakeShape<Shape, BaseShape> = Shape extends never | undefined | void
@@ -199,12 +212,32 @@ export const Platform = <
   const PlatformContext = ExecutionContext(type);
 
   const constructor = (
-    id?: string,
+    id?: string | ((...args: any[]) => Effect.Effect<any>),
     props?: any,
     impl?: Impl,
     isTag = false,
   ): any => {
-    if (!id) {
+    if (typeof id === "function") {
+      // Factory form, e.g.
+      //   export default Worker((scriptName: string) =>
+      //     Worker("Api", { name: scriptName, main: import.meta.filename, ... }, body));
+      //
+      // The user's default export is the wrapped function. At deploy
+      // time `yield* MyWorker(...args)` runs the inner Effect and
+      // stamps the args under a reserved key in `Props.env` so the
+      // existing env-binding lifecycle persists them as a `plain_text`
+      // binding on the deployed worker. At runtime, the generated
+      // entrypoint detects the `__alchemyFactory` marker, reads the
+      // serialized args back from `env`, and calls the function before
+      // treating the result as a Layer/Effect.
+      //
+      // v1 limitation: args must be JSON-serializable. `Output` /
+      // `Redacted` args are not yet supported — they would need
+      // per-arg bindings (so secrets can use `secret_text`) and a
+      // matching marker-aware decode on the runtime side.
+      // TODO(sam): support Output/Redacted factory args.
+      return Object.assign(makeFactory(id), { Type: type });
+    } else if (!id) {
       // impl was not provided inline, this is a tagged instance
       // e.g.
       // export class Sandbox extends Cloudflare.Container<Sandbox>()(..) {}

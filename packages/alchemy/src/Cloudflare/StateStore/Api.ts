@@ -48,7 +48,7 @@ export const STATE_STORE_VERSION = 1 as const;
  * stores per account by overriding the worker name (default
  * {@link STATE_STORE_SCRIPT_NAME}).
  */
-const Api = (scriptName: string = STATE_STORE_SCRIPT_NAME) => Worker(
+const Api = Worker((scriptName: string = STATE_STORE_SCRIPT_NAME) => Worker(
   "Api",
   {
     name: scriptName,
@@ -164,7 +164,7 @@ const Api = (scriptName: string = STATE_STORE_SCRIPT_NAME) => Worker(
       ),
     };
   }).pipe(Effect.provide(Layer.mergeAll(SecretBindingLive))),
-);
+));
 
 export default Api;
 

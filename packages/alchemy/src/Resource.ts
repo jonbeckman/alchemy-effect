@@ -6,6 +6,7 @@ import { toFqn } from "./FQN.ts";
 import type { Input, InputProps } from "./Input.ts";
 import { CurrentNamespace, type NamespaceNode } from "./Namespace.ts";
 import * as Output from "./Output.ts";
+import { makeFactory } from "./Factory.ts";
 import { Provider } from "./Provider.ts";
 import { RemovalPolicy } from "./RemovalPolicy.ts";
 import { Self } from "./Self.ts";
@@ -292,10 +293,17 @@ export function Resource<R extends ResourceLike>(
   };
 
   const ResourceClass = Object.assign(
-    (...args: [id: string, props: R["Props"]] | [methods: object]) =>
-      typeof args[0] === "object"
-        ? Object.assign(ResourceClass, args[0])
-        : constructor(...(args as [string, R["Props"]])),
+    (
+      ...args:
+        | [id: string, props: R["Props"]]
+        | [methods: object]
+        | [factory: (...args: any[]) => Effect.Effect<any>]
+    ) =>
+      typeof args[0] === "function"
+        ? makeFactory(args[0] as (...args: any[]) => Effect.Effect<any>)
+        : typeof args[0] === "object"
+          ? Object.assign(ResourceClass, args[0])
+          : constructor(...(args as [string, R["Props"]])),
     Service,
   ) as any;
 

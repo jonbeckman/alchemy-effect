@@ -1404,11 +1404,24 @@ import { WorkerEnvironment, makeDurableObjectBridge${hasWfClasses ? ", makeWorkf
 
 import entry from "${importPath}";
 
+// If \`entry\` is a factory-form default export (Worker((args) => Worker(...))),
+// re-apply the args persisted at deploy time before treating the
+// result as a Layer/Effect. The factory marker and reserved env-var
+// name are duplicated here verbatim because this script is emitted
+// as a string and bundled in the worker; importing the constants
+// directly from \`alchemy/Factory\` would force-bundle the rest of the
+// package.
+const __alchemyFactoryArgs = env.__ALCHEMY_FACTORY_ARGS__;
+const resolved =
+  entry && typeof entry === "function" && entry.__alchemyFactory
+    ? entry(...JSON.parse(__alchemyFactoryArgs ?? "[]"))
+    : entry;
+
 const tag = Context.Service("${Self.key}")
 const layer =
-  typeof entry?.build === "function"
-    ? entry
-    : Layer.effect(tag, typeof entry?.asEffect === "function" ? entry.asEffect() : entry);
+  typeof resolved?.build === "function"
+    ? resolved
+    : Layer.effect(tag, typeof resolved?.asEffect === "function" ? resolved.asEffect() : resolved);
 
 const platform = Layer.mergeAll(
   NodeServices.layer,
