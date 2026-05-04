@@ -1,10 +1,10 @@
 import type * as cf from "@cloudflare/workers-types";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { Scope } from "effect/Scope";
 import type { HttpBodyError } from "effect/unstable/http/HttpBody";
-import * as HttpServerError from "effect/unstable/http/HttpServerError";
+import * as HttpEffectModule from "effect/unstable/http/HttpEffect";
+import type * as HttpServerError from "effect/unstable/http/HttpServerError";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as Http from "../../Http.ts";
@@ -47,41 +47,48 @@ export const serveWebRequest = <Req = never>(
   never,
   Exclude<Req, HttpServerRequest.HttpServerRequest | Scope>
 > =>
-  Effect.gen(function* () {
-    const request = HttpServerRequest.fromWeb(
-      webRequest as any as globalThis.Request,
-    ).modify({
-      remoteAddress: Option.fromUndefinedOr(options.remoteAddress),
-    });
+  Effect.flatMap(Effect.context<any>(), (parentContext) =>
+    Effect.callback<Response>((resume) => {
+      const request = HttpServerRequest.fromWeb(
+        webRequest as any as globalThis.Request,
+      ).modify({
+        remoteAddress: Option.fromUndefinedOr(options.remoteAddress),
+      });
 
-    Object.defineProperty(request, "raw", {
-      get: () =>
-        Object.assign(request.stream, {
-          raw: webRequest.body,
-        }),
-    });
-
-    const response = yield* handler.pipe(
-      Effect.provideService(HttpServerRequest.HttpServerRequest, request),
-      Effect.provideService(Request, webRequest as any),
-      Effect.catchCause((cause) => {
-        const message = Option.match(Cause.findErrorOption(cause), {
-          onNone: () => "Internal Server Error",
-          onSome: (error) =>
-            error instanceof Error && error.message
-              ? error.message
-              : "Internal Server Error",
-        });
-        return Effect.succeed(
-          HttpServerResponse.text(message, {
-            status: 500,
-            statusText: message,
+      Object.defineProperty(request, "raw", {
+        get: () =>
+          Object.assign(request.stream, {
+            raw: webRequest.body,
           }),
-        );
-      }),
-    );
+      });
 
-    return HttpServerResponse.toWeb(response, {
-      context: yield* Effect.context(),
-    });
-  }) as any;
+      // Run the handler through `toHandled` so any `preResponseHandler`s that
+      // middleware (e.g. `HttpMiddleware.cors()`) registered on the request
+      // are applied to the final response. Without this drain, only OPTIONS
+      // preflights — which `cors()` short-circuits — get CORS headers; real
+      // GET/POST/etc. responses don't.
+      const httpApp = HttpEffectModule.toHandled(
+        handler,
+        (_req, response) => {
+          const transferred = HttpEffectModule.scopeTransferToStream(response);
+          resume(
+            Effect.succeed(
+              HttpServerResponse.toWeb(transferred, { context: parentContext }),
+            ),
+          );
+          return Effect.void;
+        },
+      );
+
+      const fiber = httpApp.pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        Effect.provideService(Request, webRequest as any),
+        Effect.provide(parentContext),
+        Effect.runFork,
+      );
+
+      return Effect.sync(() => {
+        fiber.interruptUnsafe();
+      });
+    }),
+  ) as any;
