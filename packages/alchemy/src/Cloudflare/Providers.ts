@@ -3,7 +3,9 @@ import { Command } from "../Build/Command.ts";
 import * as Build from "../Build/index.ts";
 import * as Provider from "../Provider.ts";
 import { Random, RandomProvider } from "../Random.ts";
+import * as Access from "./Access.ts";
 import * as AI from "./AI/index.ts";
+import * as AiGateway from "./AiGateway/index.ts";
 import * as ApiToken from "./ApiToken/index.ts";
 import * as Artifacts from "./Artifacts/index.ts";
 import { CloudflareAuth } from "./Auth/AuthProvider.ts";
@@ -36,6 +38,8 @@ export const providers = () =>
       AI.AIPolicy,
       ApiToken.AccountApiToken,
       ApiToken.UserApiToken,
+      AiGateway.AiGateway,
+      AiGateway.AiGatewayBindingPolicy,
       Artifacts.ArtifactsBindingPolicy,
       Command,
       Containers.Container,
@@ -63,6 +67,8 @@ export const providers = () =>
         AI.AIPolicyLive,
         ApiToken.AccountApiTokenProvider(),
         ApiToken.UserApiTokenProvider(),
+        AiGateway.AiGatewayProvider(),
+        AiGateway.AiGatewayBindingPolicyLive,
         Artifacts.ArtifactsBindingPolicyLive,
         Containers.ContainerProvider(),
         D1.D1ConnectionPolicyLive,
@@ -89,5 +95,6 @@ export const providers = () =>
     Layer.provideMerge(Credentials.fromAuthProvider()),
     Layer.provideMerge(CloudflareEnvironment.fromProfile()),
     Layer.provideMerge(CloudflareAuth),
+    Layer.provideMerge(Access.AccessLive),
     Layer.orDie,
   );
