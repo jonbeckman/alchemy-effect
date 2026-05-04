@@ -644,6 +644,13 @@ export const TableProvider = () =>
           }
         });
 
+      // For read, we want `ResourceNotFoundException` to propagate immediately
+      // (the table doesn't exist — this is the cold-start adoption "no
+      // resource" signal). Only retry on transient control-plane errors.
+      const isRetryableReadError = (error: { _tag?: string }) =>
+        error._tag === "InternalServerError" ||
+        error._tag === "LimitExceededException";
+
       const readTableState = (tableName: string) =>
         Effect.gen(function* () {
           const response = yield* dynamodb
@@ -652,7 +659,7 @@ export const TableProvider = () =>
             })
             .pipe(
               Effect.retry({
-                while: isRetryableControlPlaneError,
+                while: isRetryableReadError,
                 schedule: Schedule.exponential(250).pipe(
                   Schedule.both(Schedule.recurs(30)),
                 ),
@@ -672,7 +679,7 @@ export const TableProvider = () =>
               })
               .pipe(
                 Effect.retry({
-                  while: isRetryableControlPlaneError,
+                  while: isRetryableReadError,
                   schedule: Schedule.exponential(250).pipe(
                     Schedule.both(Schedule.recurs(30)),
                   ),

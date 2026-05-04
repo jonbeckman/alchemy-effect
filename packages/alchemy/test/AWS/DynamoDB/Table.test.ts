@@ -669,13 +669,9 @@ describe("AWS.DynamoDB.Table", () => {
         expect(takenOver.tableName).toEqual(tableName);
 
         // After the update the tags should now identify this stack/stage/id.
-        const tagsResp = yield* DynamoDB.listTagsOfResource({
-          ResourceArn: takenOver.tableArn,
-        });
-        const tagMap = Object.fromEntries(
-          (tagsResp.Tags ?? []).map((t) => [t.Key, t.Value]),
-        );
-        expect(tagMap["alchemy::id"]).toEqual("Different");
+        // The takeover update reads tags back from the cloud after writing,
+        // so `takenOver.tags` already reflects the rewritten tag set.
+        expect(takenOver.tags?.["alchemy::id"]).toEqual("Different");
 
         yield* stack.destroy();
         yield* assertTableIsDeleted(tableName);
