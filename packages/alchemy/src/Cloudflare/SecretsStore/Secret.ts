@@ -230,21 +230,48 @@ export const StoreSecretProvider = () =>
               scopes: scopesChanged ? scopes : undefined,
               comment: commentChanged ? news.comment : undefined,
             }).pipe(
+              // Catch only `SecretNotFound`: between observe and patch
+              // the secret may have been deleted out-of-band. Recreate
+              // it from `news` so we converge instead of returning a
+              // stale view of a deleted secret. Other tags (auth,
+              // throttling, store-not-found) propagate.
               Effect.catchTag("SecretNotFound", () =>
-                Effect.succeed(undefined),
+                Effect.succeed("recreate" as const),
               ),
             );
-            if (patched) {
-              return {
-                secretId: observed.id,
-                secretName: observed.name,
-                storeId: observed.storeId,
+            if (patched === "recreate") {
+              const created = yield* createStoreSecret({
                 accountId,
-                status: patched.status,
+                storeId,
+                body: [
+                  {
+                    name,
+                    scopes,
+                    value: Redacted.value(news.value),
+                    comment: news.comment,
+                  },
+                ],
+              });
+              const secret = created.result[0]!;
+              return {
+                secretId: secret.id,
+                secretName: secret.name,
+                storeId: secret.storeId,
+                accountId,
+                status: secret.status,
                 scopes,
-                comment: patched.comment ?? undefined,
+                comment: secret.comment ?? undefined,
               };
             }
+            return {
+              secretId: observed.id,
+              secretName: observed.name,
+              storeId: observed.storeId,
+              accountId,
+              status: patched.status,
+              scopes,
+              comment: patched.comment ?? undefined,
+            };
           }
 
           return {
@@ -269,8 +296,20 @@ export const StoreSecretProvider = () =>
           );
         }),
         read: Effect.fn(function* ({ id, olds, output }) {
+          const lookupByName = (
+            accountId: string,
+            storeId: string,
+            name: string,
+          ) =>
+            listStoreSecrets.items({ accountId, storeId }).pipe(
+              Stream.filter((s) => s.name === name),
+              Stream.runHead,
+              Effect.catchTag("StoreNotFound", () => Effect.succeedNone),
+              Effect.map(Option.getOrUndefined),
+            );
+
           if (output?.secretId) {
-            return yield* getStoreSecret({
+            const byId = yield* getStoreSecret({
               accountId: output.accountId,
               storeId: output.storeId,
               secretId: output.secretId,
@@ -289,6 +328,26 @@ export const StoreSecretProvider = () =>
               ),
               Effect.catchTag("StoreNotFound", () => Effect.succeed(undefined)),
             );
+            if (byId) return byId;
+            // The cached id is gone (out-of-band delete or recreate).
+            // Fall through to a name-scan in the same store so we recover
+            // an existing secret with the same logical identity.
+            const name = resolveName(id, olds?.name ?? output.secretName);
+            const match = yield* lookupByName(
+              output.accountId,
+              output.storeId,
+              name,
+            );
+            if (!match) return undefined;
+            return {
+              secretId: match.id,
+              secretName: match.name,
+              storeId: match.storeId,
+              accountId: output.accountId,
+              status: match.status,
+              scopes: output.scopes,
+              comment: match.comment ?? undefined,
+            };
           }
           if (!olds?.store) return undefined;
           const name = resolveName(id, olds.name);
