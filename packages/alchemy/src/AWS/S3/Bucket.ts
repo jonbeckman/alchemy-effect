@@ -265,12 +265,16 @@ export const BucketProvider = () =>
         );
 
         // For us-east-1, BucketAlreadyOwnedByYou is not thrown, so we need to
-        // pre-emptively check if the bucket exists for idempotency
+        // pre-emptively check if the bucket exists for idempotency.
+        //
+        // Only swallow `NotFound` (the documented "no such bucket" signal).
+        // Auth/throttling/parse errors must surface so we don't blindly try
+        // to recreate a bucket that we don't own — which would race with the
+        // real owner and bounce off `BucketAlreadyExists`.
         if (region === "us-east-1") {
           const exists = yield* s3.headBucket({ Bucket: bucketName }).pipe(
             Effect.map(() => true),
             Effect.catchTag("NotFound", () => Effect.succeed(false)),
-            Effect.catch(() => Effect.succeed(false)),
           );
 
           yield* Effect.logInfo(
@@ -287,11 +291,18 @@ export const BucketProvider = () =>
                 ObjectLockEnabledForBucket: news.objectLockEnabled ?? false,
               })
               .pipe(
+                // `OperationAborted` is S3's "another conflicting request is
+                // in flight" race (e.g. policy thrash); `ServiceUnavailable`
+                // is a 503. Both are transient — bound the retry at ~30s
+                // (~ 8 attempts of 100ms exponential) so we don't spin
+                // forever if the service stays in this state.
                 Effect.retry({
                   while: (e) =>
                     e._tag === "OperationAborted" ||
                     e._tag === "ServiceUnavailable",
-                  schedule: Schedule.exponential(100),
+                  schedule: Schedule.exponential(100).pipe(
+                    Schedule.both(Schedule.recurs(8)),
+                  ),
                 }),
               );
           }
@@ -314,7 +325,9 @@ export const BucketProvider = () =>
                 while: (e) =>
                   e._tag === "OperationAborted" ||
                   e._tag === "ServiceUnavailable",
-                schedule: Schedule.exponential(100),
+                schedule: Schedule.exponential(100).pipe(
+                  Schedule.both(Schedule.recurs(8)),
+                ),
               }),
             );
         }
@@ -339,9 +352,11 @@ export const BucketProvider = () =>
         };
       });
 
-      const fetchBucketTags = (
-        bucketName: string,
-      ): Effect.Effect<Record<string, string>, never, any> =>
+      const fetchBucketTags = (bucketName: string) =>
+        // Only swallow the documented "no tags / no bucket" signals so real
+        // failures (auth, throttling, parse errors) surface instead of being
+        // silently coerced into "bucket has no tags" — which would make us
+        // wipe and re-write the tagset on every reconcile.
         s3.getBucketTagging({ Bucket: bucketName }).pipe(
           Effect.map(
             (r) =>
@@ -352,39 +367,37 @@ export const BucketProvider = () =>
           Effect.catchTag("NoSuchTagSet", () =>
             Effect.succeed({} as Record<string, string>),
           ),
-          Effect.catch(() => Effect.succeed({} as Record<string, string>)),
+          Effect.catchTag("NoSuchBucket", () =>
+            Effect.succeed({} as Record<string, string>),
+          ),
         );
 
       const syncBucketTags = Effect.fnUntraced(function* ({
         bucketName,
-        oldTags,
         newTags,
         session,
         operation,
       }: {
         bucketName: string;
-        oldTags?: Record<string, string>;
         newTags?: Record<string, string>;
         session: ScopedPlanStatusSession;
         operation: "create" | "update";
       }) {
         // Compare against the cloud's actual tags so drift surfaces
         // correctly even after a cold-start adoption (where olds.tags
-        // equals news.tags and would otherwise look like a no-op).
-        const previousTags = oldTags ?? (yield* fetchBucketTags(bucketName));
+        // would equal news.tags and otherwise look like a no-op).
+        const previousTags = yield* fetchBucketTags(bucketName);
         const desiredTags = newTags ?? {};
         const { removed, upsert } = diffTags(previousTags, desiredTags);
-        const canSkip = oldTags !== undefined;
 
         yield* Effect.logInfo(
           `S3 Bucket ${operation}: bucket=${bucketName} removedTags=${removed.length} upsertTags=${Object.keys(upsert).length}`,
         );
 
-        if (
-          canSkip &&
-          removed.length === 0 &&
-          Object.keys(upsert).length === 0
-        ) {
+        // Already in sync — every later step is unnecessary. Skipping here
+        // also avoids issuing `deleteBucketTagging` on a bucket that already
+        // has no tags (which would be a no-op API write on every reconcile).
+        if (removed.length === 0 && Object.keys(upsert).length === 0) {
           return;
         }
 
@@ -486,10 +499,14 @@ export const BucketProvider = () =>
             output?.bucketName ?? (yield* createBucketName(id, olds ?? {}));
           const region = yield* Region;
           const { accountId } = yield* AWSEnvironment;
+          // Only swallow `NotFound` — that is the documented "no such
+          // bucket in this account" signal. Throttling, parse, network and
+          // permission errors must surface so callers get a real failure
+          // instead of a silent "bucket missing" misdiagnosis.
           const exists = yield* s3.headBucket({ Bucket: bucketName }).pipe(
             Effect.map(() => true),
             Effect.catchTag("NotFound", () => Effect.succeed(false)),
-            Effect.catch(() => Effect.succeed(false)),
+            Effect.catchTag("NoSuchBucket", () => Effect.succeed(false)),
           );
           if (!exists) return undefined;
           return {
@@ -539,9 +556,6 @@ export const BucketProvider = () =>
 
           yield* syncBucketTags({
             bucketName: resolved.bucketName,
-            // Omit `oldTags` so syncBucketTags fetches the cloud's actual
-            // current tags. This makes drift detection correct even after
-            // a cold-start adoption where olds.tags would equal news.tags.
             newTags: news.tags,
             session,
             operation,

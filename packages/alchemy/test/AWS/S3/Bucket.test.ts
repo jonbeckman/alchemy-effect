@@ -1,3 +1,4 @@
+import { adopt } from "@/AdoptPolicy";
 import * as AWS from "@/AWS";
 import { Bucket } from "@/AWS/S3";
 import { State } from "@/State";
@@ -366,6 +367,402 @@ test.provider(
       );
 
       expect(adopted.bucketArn).toEqual(initial.bucketArn);
+
+      yield* stack.destroy();
+      yield* assertBucketDeleted(bucketName);
+    }),
+);
+
+test.provider(
+  "redeploy with same props is a no-op (reconcile is idempotent)",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const initial = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("IdempotentReconcileBucket", {
+            tags: { Environment: "test" },
+            forceDestroy: true,
+          });
+        }),
+      );
+
+      // Deploy again with identical props — reconcile must converge
+      // without changing the bucket.
+      const second = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("IdempotentReconcileBucket", {
+            tags: { Environment: "test" },
+            forceDestroy: true,
+          });
+        }),
+      );
+
+      expect(second.bucketName).toEqual(initial.bucketName);
+      expect(second.bucketArn).toEqual(initial.bucketArn);
+
+      const tagging = yield* S3.getBucketTagging({
+        Bucket: second.bucketName,
+      });
+      expect(tagging.TagSet).toContainEqual({
+        Key: "Environment",
+        Value: "test",
+      });
+
+      yield* stack.destroy();
+      yield* assertBucketDeleted(initial.bucketName);
+    }),
+);
+
+test.provider(
+  "reconcile resets tags mutated out-of-band",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const bucket = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("DriftTagsBucket", {
+            tags: { Environment: "test" },
+            forceDestroy: true,
+          });
+        }),
+      );
+
+      // Mutate tags out-of-band via the raw SDK.
+      yield* S3.putBucketTagging({
+        Bucket: bucket.bucketName,
+        Tagging: {
+          TagSet: [
+            { Key: "Drifted", Value: "yes" },
+            { Key: "Environment", Value: "WRONG" },
+          ],
+        },
+      });
+
+      // Re-deploy with the original desired props — reconcile should
+      // observe the drifted cloud tags and reset them.
+      const redeployed = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("DriftTagsBucket", {
+            tags: { Environment: "test" },
+            forceDestroy: true,
+          });
+        }),
+      );
+      expect(redeployed.bucketName).toEqual(bucket.bucketName);
+
+      const tagging = yield* S3.getBucketTagging({
+        Bucket: bucket.bucketName,
+      });
+      const tagMap = Object.fromEntries(
+        (tagging.TagSet ?? []).map((t) => [t.Key, t.Value]),
+      );
+      expect(tagMap["Environment"]).toEqual("test");
+      expect(tagMap["Drifted"]).toBeUndefined();
+
+      yield* stack.destroy();
+      yield* assertBucketDeleted(bucket.bucketName);
+    }),
+);
+
+test.provider(
+  "reconcile resets a bucket policy mutated out-of-band",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const distributionArn =
+        "arn:aws:cloudfront::123456789012:distribution/DRIFTDIST";
+      const bucketName = `alchemy-test-s3-policy-drift-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+      const bucketArn = `arn:aws:s3:::${bucketName}` as const;
+
+      const bucket = yield* stack.deploy(
+        Effect.gen(function* () {
+          const bucket = yield* Bucket("DriftPolicyBucket", {
+            bucketName,
+            forceDestroy: true,
+          });
+          yield* bucket.bind("AWS.S3.Policy(DriftDist, DriftPolicyBucket)", {
+            policyStatements: [
+              {
+                Effect: "Allow",
+                Principal: { Service: "cloudfront.amazonaws.com" },
+                Action: ["s3:GetObject"],
+                Resource: [`${bucketArn}/*`],
+                Condition: {
+                  StringEquals: { "AWS:SourceArn": distributionArn },
+                },
+              },
+            ],
+          });
+          return bucket;
+        }),
+      );
+
+      // Replace the bucket's policy out-of-band with something foreign.
+      yield* S3.putBucketPolicy({
+        Bucket: bucket.bucketName,
+        Policy: JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Sid: "ForeignDrifted",
+              Effect: "Allow",
+              Principal: "*",
+              Action: ["s3:GetObject"],
+              Resource: [`${bucketArn}/*`],
+            },
+          ],
+        }),
+      });
+
+      // Re-deploy — reconcile must reset the policy back to what bindings
+      // describe.
+      yield* stack.deploy(
+        Effect.gen(function* () {
+          const bucket = yield* Bucket("DriftPolicyBucket", {
+            bucketName,
+            forceDestroy: true,
+          });
+          yield* bucket.bind("AWS.S3.Policy(DriftDist, DriftPolicyBucket)", {
+            policyStatements: [
+              {
+                Effect: "Allow",
+                Principal: { Service: "cloudfront.amazonaws.com" },
+                Action: ["s3:GetObject"],
+                Resource: [`${bucketArn}/*`],
+                Condition: {
+                  StringEquals: { "AWS:SourceArn": distributionArn },
+                },
+              },
+            ],
+          });
+          return bucket;
+        }),
+      );
+
+      const policy = yield* S3.getBucketPolicy({
+        Bucket: bucket.bucketName,
+      }).pipe(Effect.map((r) => JSON.parse(r.Policy!)));
+      expect(policy.Statement).toHaveLength(1);
+      expect(policy.Statement[0].Principal).toEqual({
+        Service: "cloudfront.amazonaws.com",
+      });
+      expect(policy.Statement[0].Sid).toBeUndefined();
+
+      yield* stack.destroy();
+      yield* assertBucketDeleted(bucket.bucketName);
+    }),
+);
+
+test.provider(
+  "reconcile re-creates a bucket that was deleted out-of-band",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const bucketName = `alchemy-test-s3-recreate-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+
+      const initial = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("RecreateBucket", {
+            bucketName,
+            forceDestroy: true,
+          });
+        }),
+      );
+
+      // Delete the bucket out-of-band. S3 forbids reusing the same name
+      // for a brief window — the reconciler's bounded retries on
+      // `OperationAborted` / `ServiceUnavailable` ride this out.
+      yield* S3.deleteBucket({ Bucket: initial.bucketName });
+      yield* assertBucketDeleted(initial.bucketName);
+
+      const recreated = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("RecreateBucket", {
+            bucketName,
+            forceDestroy: true,
+          });
+        }),
+      );
+      expect(recreated.bucketName).toEqual(bucketName);
+      yield* S3.headBucket({ Bucket: recreated.bucketName });
+
+      yield* stack.destroy();
+      yield* assertBucketDeleted(recreated.bucketName);
+    }),
+  { timeout: 180_000 },
+);
+
+test.provider(
+  "changing bucketName triggers replace; old bucket is deleted",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const suffix = Math.random().toString(36).slice(2, 8);
+      const nameA = `alchemy-test-s3-rename-a-${suffix}`;
+      const nameB = `alchemy-test-s3-rename-b-${suffix}`;
+
+      const a = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("RenameBucket", {
+            bucketName: nameA,
+            forceDestroy: true,
+          });
+        }),
+      );
+      expect(a.bucketName).toEqual(nameA);
+
+      const b = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("RenameBucket", {
+            bucketName: nameB,
+            forceDestroy: true,
+          });
+        }),
+      );
+      expect(b.bucketName).toEqual(nameB);
+      expect(b.bucketArn).not.toEqual(a.bucketArn);
+
+      yield* assertBucketDeleted(a.bucketName);
+
+      yield* stack.destroy();
+      yield* assertBucketDeleted(b.bucketName);
+    }),
+);
+
+test.provider(
+  "flipping objectLockEnabled triggers replace",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const initial = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("ObjectLockFlipBucket", {
+            bucketName: `alchemy-test-s3-objlock-${Math.random()
+              .toString(36)
+              .slice(2, 8)}`,
+            forceDestroy: true,
+          });
+        }),
+      );
+
+      const replaced = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("ObjectLockFlipBucket", {
+            bucketName: `alchemy-test-s3-objlock-${Math.random()
+              .toString(36)
+              .slice(2, 8)}`,
+            objectLockEnabled: true,
+            forceDestroy: true,
+          });
+        }),
+      );
+      expect(replaced.bucketArn).not.toEqual(initial.bucketArn);
+
+      const lockConfig = yield* S3.getObjectLockConfiguration({
+        Bucket: replaced.bucketName,
+      });
+      expect(
+        lockConfig.ObjectLockConfiguration?.ObjectLockEnabled,
+      ).toEqual("Enabled");
+
+      yield* assertBucketDeleted(initial.bucketName);
+
+      yield* stack.destroy();
+      yield* assertBucketDeleted(replaced.bucketName);
+    }),
+  { timeout: 180_000 },
+);
+
+test.provider(
+  "destroying an already-deleted bucket is a no-op",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const bucket = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("DoubleDestroyBucket", {
+            forceDestroy: true,
+          });
+        }),
+      );
+
+      // Delete the bucket out-of-band, then ask the engine to destroy it.
+      // `delete` must catch `NoSuchBucket` and complete cleanly.
+      yield* S3.deleteBucket({ Bucket: bucket.bucketName });
+      yield* assertBucketDeleted(bucket.bucketName);
+
+      yield* stack.destroy();
+    }),
+);
+
+test.provider(
+  "adopt(true) re-syncs tags on a foreign-tagged bucket",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const bucketName = `alchemy-test-s3-adopt-tags-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+
+      // Pre-deploy with foreign tags, then wipe the state file so the
+      // next deploy must adopt — adopt(true) is required because we
+      // simulate a stack rename (logical id changes from "Original" to
+      // "Different").
+      const original = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Bucket("Original", {
+            bucketName,
+            tags: { OwnedBy: "someone-else", Stage: "stale" },
+            forceDestroy: true,
+          });
+        }),
+      );
+
+      yield* Effect.gen(function* () {
+        const state = yield* State;
+        yield* state.delete({
+          stack: stack.name,
+          stage: "test",
+          fqn: "Original",
+        });
+      }).pipe(Effect.provide(stack.state));
+
+      const adopted = yield* stack
+        .deploy(
+          Effect.gen(function* () {
+            return yield* Bucket("Different", {
+              bucketName,
+              tags: { OwnedBy: "alchemy", Stage: "fresh" },
+              forceDestroy: true,
+            });
+          }),
+        )
+        .pipe(adopt(true));
+
+      expect(adopted.bucketName).toEqual(bucketName);
+      expect(adopted.bucketArn).toEqual(original.bucketArn);
+
+      const tagging = yield* S3.getBucketTagging({
+        Bucket: adopted.bucketName,
+      });
+      const tagMap = Object.fromEntries(
+        (tagging.TagSet ?? []).map((t) => [t.Key, t.Value]),
+      );
+      expect(tagMap["OwnedBy"]).toEqual("alchemy");
+      expect(tagMap["Stage"]).toEqual("fresh");
 
       yield* stack.destroy();
       yield* assertBucketDeleted(bucketName);
