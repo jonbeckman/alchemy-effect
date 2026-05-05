@@ -1,8 +1,10 @@
 import { Region as AwsRegion } from "@distilled.cloud/aws/Region";
 import * as acm from "@distilled.cloud/aws/acm";
 import * as route53 from "@distilled.cloud/aws/route-53";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
+import { Unowned } from "../../AdoptPolicy.ts";
 import { deepEqual, isResolved } from "../../Diff.ts";
 import * as Provider from "../../Provider.ts";
 import { Resource } from "../../Resource.ts";
@@ -13,6 +15,15 @@ import {
   diffTags,
   hasAlchemyTags,
 } from "../../Tags.ts";
+
+class ValidationRecordsPending extends Data.TaggedError(
+  "ValidationRecordsPending",
+) {}
+class CertificatePendingValidation extends Data.TaggedError(
+  "CertificatePendingValidation",
+) {}
+class Route53ChangePending extends Data.TaggedError("Route53ChangePending") {}
+class CertificateInUse extends Data.TaggedError("CertificateInUse") {}
 
 export interface CertificateProps {
   /**
@@ -156,7 +167,12 @@ export const CertificateProvider = () =>
         );
       });
 
-      const findManagedCertificate = Effect.fn(function* (
+      // Find any certificate matching the desired domain + SAN combo.
+      // Returns the first match plus a flag indicating whether it carries
+      // our alchemy ownership tags. Callers branch on `owned` to decide
+      // between silent adoption (owned), `Unowned(attrs)` gating, or a
+      // greenfield request.
+      const findCertificateByDomain = Effect.fn(function* (
         id: string,
         props: CertificateProps,
       ) {
@@ -172,6 +188,10 @@ export const CertificateProvider = () =>
           listed.CertificateSummaryList?.filter(
             (summary) => summary.DomainName === props.domainName,
           ) ?? [];
+
+        let firstMatch:
+          | { detail: acm.CertificateDetail; tags: Record<string, string> }
+          | undefined;
 
         for (const summary of summaries) {
           if (!summary.CertificateArn) {
@@ -190,13 +210,22 @@ export const CertificateProvider = () =>
           }
           const tags = yield* listCertificateTags(detail.CertificateArn);
           if (yield* hasAlchemyTags(id, tags)) {
-            return detail;
+            // Owned match — prefer it over any foreign match we may have
+            // recorded earlier.
+            return { detail, tags, owned: true as const };
           }
+          firstMatch ??= { detail, tags };
         }
 
-        return undefined;
+        return firstMatch
+          ? { ...firstMatch, owned: false as const }
+          : undefined;
       });
 
+      // Wait until ACM has populated `ResourceRecord` on every domain
+      // validation option. ACM does this asynchronously after
+      // `RequestCertificate` returns. Bounded so we don't loop forever
+      // if ACM never produces records (would surface as a hard fail).
       const waitForValidationRecords = Effect.fn(function* (
         certificateArn: string,
       ) {
@@ -207,16 +236,12 @@ export const CertificateProvider = () =>
               validations.length === 0 ||
               validations.some((option) => option.ResourceRecord === undefined)
             ) {
-              return Effect.fail(
-                new Error("CertificateValidationRecordPending"),
-              );
+              return Effect.fail(new ValidationRecordsPending());
             }
             return Effect.succeed(detail!);
           }),
           Effect.retry({
-            while: (error) =>
-              error instanceof Error &&
-              error.message === "CertificateValidationRecordPending",
+            while: (error) => error._tag === "ValidationRecordsPending",
             schedule: Schedule.fixed("2 seconds").pipe(
               Schedule.both(Schedule.recurs(60)),
             ),
@@ -224,11 +249,20 @@ export const CertificateProvider = () =>
         );
       });
 
+      // Wait for ACM to mark the certificate ISSUED. Only retry while the
+      // status is `PENDING_VALIDATION`; terminal failures (`FAILED`,
+      // `VALIDATION_TIMED_OUT`) surface immediately. Capped at 10 minutes
+      // (60 * 10s) — DNS validation typically completes in under a minute,
+      // but we leave headroom for slow Route 53 propagation.
       const waitForIssued = Effect.fn(function* (certificateArn: string) {
         return yield* describeCertificate(certificateArn).pipe(
           Effect.flatMap((detail) => {
             if (!detail?.CertificateArn) {
-              return Effect.fail(new Error("CertificateNotFound"));
+              return Effect.fail(
+                new Error(
+                  `Certificate ${certificateArn} disappeared while waiting for issuance`,
+                ),
+              );
             }
             if (detail.Status === "ISSUED") {
               return Effect.succeed(detail);
@@ -240,12 +274,12 @@ export const CertificateProvider = () =>
                 ),
               );
             }
-            return Effect.fail(new Error("CertificatePendingValidation"));
+            return Effect.fail(new CertificatePendingValidation());
           }),
           Effect.retry({
             while: (error) =>
-              error instanceof Error &&
-              error.message === "CertificatePendingValidation",
+              (error as { _tag?: string })._tag ===
+              "CertificatePendingValidation",
             schedule: Schedule.fixed("10 seconds").pipe(
               Schedule.both(Schedule.recurs(60)),
             ),
@@ -253,18 +287,18 @@ export const CertificateProvider = () =>
         );
       });
 
+      // Wait for the Route 53 change to reach INSYNC across all edge
+      // locations. Capped at 2 minutes (60 * 2s) — typically takes <30s.
       const waitForChange = Effect.fn(function* (changeId: string) {
         return yield* route53.getChange({ Id: changeId }).pipe(
           Effect.map((response) => response.ChangeInfo),
           Effect.flatMap((changeInfo) =>
             changeInfo.Status === "INSYNC"
               ? Effect.succeed(changeInfo)
-              : Effect.fail(new Error("Route53ChangePending")),
+              : Effect.fail(new Route53ChangePending()),
           ),
           Effect.retry({
-            while: (error) =>
-              error instanceof Error &&
-              error.message === "Route53ChangePending",
+            while: (error) => error._tag === "Route53ChangePending",
             schedule: Schedule.fixed("2 seconds").pipe(
               Schedule.both(Schedule.recurs(60)),
             ),
@@ -327,16 +361,26 @@ export const CertificateProvider = () =>
           }
         }),
         read: Effect.fn(function* ({ id, olds, output }) {
-          const certificate = output?.certificateArn
-            ? yield* describeCertificate(output.certificateArn)
-            : yield* findManagedCertificate(id, olds!);
-
-          if (!certificate?.CertificateArn) {
-            return undefined;
+          // Fast path: cached ARN. We trust output.certificateArn (a stable
+          // ID) and just refresh attributes from cloud — no ownership check
+          // because the engine recorded this ARN itself.
+          if (output?.certificateArn) {
+            const detail = yield* describeCertificate(output.certificateArn);
+            if (!detail?.CertificateArn) {
+              return undefined;
+            }
+            const tags = yield* listCertificateTags(detail.CertificateArn);
+            return toAttrs(olds ?? ({} as CertificateProps), detail, tags);
           }
 
-          const tags = yield* listCertificateTags(certificate.CertificateArn);
-          return toAttrs(olds!, certificate, tags);
+          // Slow path: state was lost. Search by domain + SAN. If we find
+          // a match without our ownership tags, return Unowned(attrs) so
+          // the engine gates on `--adopt`/`adopt(true)`.
+          if (!olds) return undefined;
+          const found = yield* findCertificateByDomain(id, olds);
+          if (!found) return undefined;
+          const attrs = toAttrs(olds, found.detail, found.tags);
+          return found.owned ? attrs : Unowned(attrs);
         }),
         reconcile: Effect.fn(function* ({
           id,
@@ -354,11 +398,17 @@ export const CertificateProvider = () =>
           // can't be renamed, and most fields trigger replace via diff,
           // so the only real ensure path is "request if no managed
           // certificate exists".
+          //
+          // We accept any matching cert here (including foreign-tagged):
+          // the engine has already passed the adopt gate by this point if
+          // `read` returned `Unowned`, so reconciling is safe and the
+          // tag-sync block below will reassert ownership.
           let certificate = output?.certificateArn
             ? yield* describeCertificate(output.certificateArn)
             : undefined;
           if (!certificate?.CertificateArn) {
-            certificate = yield* findManagedCertificate(id, news);
+            const found = yield* findCertificateByDomain(id, news);
+            certificate = found?.detail;
           }
 
           // Ensure — request a new certificate if none exists. The
@@ -450,6 +500,15 @@ export const CertificateProvider = () =>
           return toAttrs(news, certificate, finalTags);
         }),
         delete: Effect.fn(function* ({ output }) {
+          // ACM forbids deleting a certificate that's still attached to
+          // an integrated service (CloudFront, ELB, API Gateway, etc.).
+          // Detachment is eventually consistent — even after the user
+          // removes the association, ACM may continue to surface
+          // `ResourceInUseException` for tens of seconds. Bounded retry
+          // (5 minutes total) rides this out so a destroy that immediately
+          // follows an unwiring of dependencies still converges, while
+          // capping us so a cert that's genuinely still in use surfaces
+          // a clear error instead of looping forever.
           yield* withAcmRegion(
             acm
               .deleteCertificate({
@@ -457,6 +516,15 @@ export const CertificateProvider = () =>
               })
               .pipe(
                 Effect.catchTag("ResourceNotFoundException", () => Effect.void),
+                Effect.catchTag("ResourceInUseException", () =>
+                  Effect.fail(new CertificateInUse()),
+                ),
+                Effect.retry({
+                  while: (e) => e._tag === "CertificateInUse",
+                  schedule: Schedule.fixed("5 seconds").pipe(
+                    Schedule.both(Schedule.recurs(60)),
+                  ),
+                }),
               ),
           );
         }),
