@@ -4,6 +4,7 @@ import { AwsClient } from "aws4fetch";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
+import * as Schedule from "effect/Schedule";
 import * as https from "node:https";
 import {
   buildKubernetesObjectPath,
@@ -15,11 +16,96 @@ import {
   type KubernetesObjectRef,
 } from "./types.ts";
 
+/**
+ * Generic Kubernetes API error — returned for any non-2xx status the more
+ * specific tagged errors below don't cover (4xx auth/validation, 5xx).
+ */
 export class KubernetesApiError extends Data.TaggedError("KubernetesApiError")<{
   method: string;
   path: string;
   statusCode: number;
   body: string;
+}> {}
+
+/**
+ * The server replied 404 — the requested resource does not exist. Callers
+ * decide whether that's terminal (delete is a no-op) or whether reconcile
+ * should fall through to create.
+ */
+export class KubernetesNotFound extends Data.TaggedError("KubernetesNotFound")<{
+  method: string;
+  path: string;
+  body: string;
+}> {}
+
+/**
+ * The server replied 409 Conflict. Two common shapes:
+ *   - resourceVersion changed underneath us (optimistic concurrency)
+ *   - "object is being deleted" / "namespace is being terminated"
+ * Both shapes are retryable in bounded fashion: the second resolves only
+ * after the prior delete completes, so we cap retries to avoid looping
+ * forever when the cluster genuinely refuses (e.g. namespace stuck
+ * terminating).
+ */
+export class KubernetesConflict extends Data.TaggedError("KubernetesConflict")<{
+  method: string;
+  path: string;
+  body: string;
+}> {}
+
+/**
+ * The server replied 429 Too Many Requests. Always safe to retry with
+ * backoff — the API server is asking us to slow down.
+ */
+export class KubernetesThrottled extends Data.TaggedError(
+  "KubernetesThrottled",
+)<{
+  method: string;
+  path: string;
+  body: string;
+}> {}
+
+/**
+ * Transport-level failure (TCP reset, TLS handshake, DNS, etc.) before we
+ * got an HTTP status. Always retryable, since by definition the request
+ * never reached the API server's decision logic.
+ */
+export class KubernetesNetworkError extends Data.TaggedError(
+  "KubernetesNetworkError",
+)<{
+  method: string;
+  path: string;
+  cause: string;
+}> {}
+
+/**
+ * Bounded wait for a `Deployment` to converge to ready. Surfaces if it
+ * never does, so callers get a real failure instead of silently returning
+ * before pods come up.
+ */
+export class KubernetesDeploymentNotReady extends Data.TaggedError(
+  "KubernetesDeploymentNotReady",
+)<{
+  namespace: string;
+  name: string;
+  observedGeneration: number | undefined;
+  generation: number | undefined;
+  readyReplicas: number | undefined;
+  updatedReplicas: number | undefined;
+  desiredReplicas: number | undefined;
+}> {}
+
+/**
+ * Bounded wait for a delete to fully clear (finalizers run, tombstone
+ * removed). Surfaces if it doesn't.
+ */
+export class KubernetesDeleteNotComplete extends Data.TaggedError(
+  "KubernetesDeleteNotComplete",
+)<{
+  apiVersion: string;
+  kind: string;
+  namespace: string | undefined;
+  name: string;
 }> {}
 
 export interface KubernetesClusterConnection {
@@ -116,6 +202,38 @@ const requestJson = Effect.fn(function* ({
               const statusCode = response.statusCode ?? 500;
 
               if (statusCode < 200 || statusCode >= 300) {
+                // Narrow the error so callers can `catchTag` precisely
+                // instead of inspecting `statusCode` on a generic envelope.
+                if (statusCode === 404) {
+                  reject(
+                    new KubernetesNotFound({
+                      method,
+                      path,
+                      body: responseBody,
+                    }),
+                  );
+                  return;
+                }
+                if (statusCode === 409) {
+                  reject(
+                    new KubernetesConflict({
+                      method,
+                      path,
+                      body: responseBody,
+                    }),
+                  );
+                  return;
+                }
+                if (statusCode === 429) {
+                  reject(
+                    new KubernetesThrottled({
+                      method,
+                      path,
+                      body: responseBody,
+                    }),
+                  );
+                  return;
+                }
                 reject(
                   new KubernetesApiError({
                     method,
@@ -147,14 +265,54 @@ const requestJson = Effect.fn(function* ({
         }
         request.end();
       }),
-    catch: (error) =>
-      error instanceof KubernetesApiError
-        ? error
-        : new Error(
-            `Failed Kubernetes ${method} ${path}: ${error instanceof Error ? error.message : String(error)}`,
-          ),
+    catch: (error) => {
+      // Pass typed API errors through untouched.
+      if (
+        error instanceof KubernetesApiError ||
+        error instanceof KubernetesNotFound ||
+        error instanceof KubernetesConflict ||
+        error instanceof KubernetesThrottled
+      ) {
+        return error;
+      }
+      // Anything else — TLS, ECONNRESET, DNS, socket hangup — is a
+      // transport-level failure that never reached the API server's
+      // decision logic. Always retryable.
+      return new KubernetesNetworkError({
+        method,
+        path,
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    },
   });
 });
+
+/**
+ * 429 throttling and transport hiccups are universally retryable; cap to
+ * keep CLI deploys bounded if the cluster is genuinely down.
+ */
+const transientRetrySchedule = Schedule.exponential("1 second").pipe(
+  Schedule.both(Schedule.recurs(8)),
+);
+
+const retryTransient = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.retry(effect, {
+    while: (e: E) => {
+      const tag = (e as { _tag?: string })._tag;
+      return tag === "KubernetesThrottled" || tag === "KubernetesNetworkError";
+    },
+    schedule: transientRetrySchedule,
+  });
+
+/**
+ * 409 retry budget for apply. Conflicts here are usually:
+ *   - resourceVersion races (resolves on next read)
+ *   - "namespace is being terminated" (resolves once the namespace is gone)
+ * Bounded so a stuck namespace fails the deploy instead of looping forever.
+ */
+const conflictRetrySchedule = Schedule.exponential("1 second").pipe(
+  Schedule.both(Schedule.recurs(10)),
+);
 
 export const readObject = Effect.fn(function* ({
   connection,
@@ -167,7 +325,7 @@ export const readObject = Effect.fn(function* ({
     connection,
     method: "GET",
     path: buildKubernetesObjectPath(object),
-  });
+  }).pipe(retryTransient);
 });
 
 export const applyObject = Effect.fn(function* ({
@@ -179,31 +337,167 @@ export const applyObject = Effect.fn(function* ({
 }) {
   const path = `${buildKubernetesObjectPath(toKubernetesObjectRef(object))}?fieldManager=${fieldManager}&force=true`;
 
-  return yield* requestJson({
+  const result = yield* requestJson({
     connection,
     method: "PATCH",
     path,
     body: object,
-  });
+  }).pipe(
+    retryTransient,
+    // 409 on apply means a concurrent writer or a namespace mid-delete.
+    // Both resolve on retry; we cap so a permanently-stuck namespace
+    // surfaces instead of looping forever.
+    Effect.retry({
+      while: (e) => (e as { _tag?: string })._tag === "KubernetesConflict",
+      schedule: conflictRetrySchedule,
+    }),
+  );
+
+  // For Deployments specifically, wait until the rollout converges so
+  // downstream resources don't see a half-deployed app. We compare
+  // status.observedGeneration against metadata.generation and check
+  // readyReplicas — the canonical kubectl rollout-status check.
+  if (object.apiVersion === "apps/v1" && object.kind === "Deployment") {
+    yield* waitForDeploymentReady({
+      connection,
+      object: toKubernetesObjectRef(object),
+    });
+  }
+
+  return result;
 });
 
-export const deleteObject = Effect.fn(function* ({
+export interface DeploymentLike {
+  metadata?: {
+    generation?: number;
+  };
+  spec?: {
+    replicas?: number;
+  };
+  status?: {
+    observedGeneration?: number;
+    readyReplicas?: number;
+    updatedReplicas?: number;
+    availableReplicas?: number;
+    replicas?: number;
+  };
+}
+
+export const isDeploymentReady = (deployment: DeploymentLike): boolean => {
+  const generation = deployment.metadata?.generation;
+  const observed = deployment.status?.observedGeneration;
+  // Controller hasn't seen our update yet.
+  if (generation !== undefined && observed !== undefined && observed < generation) {
+    return false;
+  }
+  const desired = deployment.spec?.replicas ?? 1;
+  const ready = deployment.status?.readyReplicas ?? 0;
+  const updated = deployment.status?.updatedReplicas ?? 0;
+  return ready >= desired && updated >= desired;
+};
+
+/**
+ * Bounded poll for `availableReplicas`/`readyReplicas` to catch up to
+ * `spec.replicas` after an apply. We give the rollout 5 minutes (enough
+ * for an image pull on a cold node, well short of a hung deploy).
+ */
+const waitForDeploymentReady = Effect.fn(function* ({
   connection,
   object,
 }: {
   connection: KubernetesClusterConnection;
   object: KubernetesObjectRef;
 }) {
+  const deployment = yield* readObject({
+    connection,
+    object,
+  }).pipe(
+    Effect.flatMap((d) => {
+      const dep = d as DeploymentLike;
+      if (isDeploymentReady(dep)) {
+        return Effect.succeed(dep);
+      }
+      return Effect.fail(
+        new KubernetesDeploymentNotReady({
+          namespace: object.namespace ?? "",
+          name: object.name,
+          observedGeneration: dep.status?.observedGeneration,
+          generation: dep.metadata?.generation,
+          readyReplicas: dep.status?.readyReplicas,
+          updatedReplicas: dep.status?.updatedReplicas,
+          desiredReplicas: dep.spec?.replicas,
+        }),
+      );
+    }),
+    Effect.retry({
+      while: (e) =>
+        (e as { _tag?: string })._tag === "KubernetesDeploymentNotReady",
+      schedule: Schedule.fixed("2 seconds").pipe(
+        Schedule.both(Schedule.recurs(150)),
+      ),
+    }),
+  );
+  return deployment;
+});
+
+export const deleteObject = Effect.fn(function* ({
+  connection,
+  object,
+  waitForRemoval = false,
+}: {
+  connection: KubernetesClusterConnection;
+  object: KubernetesObjectRef;
+  /**
+   * If true, poll until the object returns 404 (finalizers complete).
+   * Useful for namespaces and other finalizer-heavy resources where the
+   * server returns 200 immediately but the object lingers with a
+   * deletionTimestamp until controllers run.
+   */
+  waitForRemoval?: boolean;
+}) {
+  // The DELETE itself is idempotent on 404 (already gone) and bounded-
+  // retryable on 409 (conflicts during finalization).
   yield* requestJson({
     connection,
     method: "DELETE",
     path: buildKubernetesObjectPath(object),
   }).pipe(
-    Effect.catchIf(
-      (error): error is KubernetesApiError =>
-        error instanceof KubernetesApiError,
-      (error) => (error.statusCode === 404 ? Effect.void : Effect.fail(error)),
+    retryTransient,
+    Effect.catchTag("KubernetesNotFound", () => Effect.void),
+    Effect.retry({
+      while: (e) => (e as { _tag?: string })._tag === "KubernetesConflict",
+      schedule: conflictRetrySchedule,
+    }),
+  );
+
+  if (!waitForRemoval) {
+    return;
+  }
+
+  // Poll GET until we get a 404. Bounded — a hung namespace finalizer
+  // surfaces as KubernetesDeleteNotComplete instead of a silent timeout.
+  yield* readObject({
+    connection,
+    object,
+  }).pipe(
+    Effect.flatMap(() =>
+      Effect.fail(
+        new KubernetesDeleteNotComplete({
+          apiVersion: object.apiVersion,
+          kind: object.kind,
+          namespace: object.namespace,
+          name: object.name,
+        }),
+      ),
     ),
+    Effect.catchTag("KubernetesNotFound", () => Effect.void),
+    Effect.retry({
+      while: (e) =>
+        (e as { _tag?: string })._tag === "KubernetesDeleteNotComplete",
+      schedule: Schedule.fixed("2 seconds").pipe(
+        Schedule.both(Schedule.recurs(150)),
+      ),
+    }),
   );
 });
 
@@ -224,9 +518,14 @@ export const reconcileObjects = Effect.fn(function* ({
   );
 
   for (const object of sortRefsForDelete(removedObjects)) {
+    // Wait for namespaces to finish terminating before we move on, so a
+    // subsequent apply that recreates an object in that namespace doesn't
+    // race with the namespace's finalizer and 409.
+    const waitForRemoval = object.kind === "Namespace";
     yield* deleteObject({
       connection,
       object,
+      waitForRemoval,
     });
   }
 
@@ -255,9 +554,11 @@ export const deleteObjects = Effect.fn(function* ({
   objects: ReadonlyArray<KubernetesObjectRef>;
 }) {
   for (const object of sortRefsForDelete(objects)) {
+    const waitForRemoval = object.kind === "Namespace";
     yield* deleteObject({
       connection,
       object,
+      waitForRemoval,
     });
   }
 });
