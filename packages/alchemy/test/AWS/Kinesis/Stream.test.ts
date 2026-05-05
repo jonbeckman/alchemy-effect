@@ -646,6 +646,422 @@ describe("AWS.Kinesis.Stream", () => {
     { timeout: 240_000 },
   );
 
+  test.provider(
+    "redeploy with same props is a no-op (reconcile is idempotent)",
+    (stack) =>
+      Effect.gen(function* () {
+        yield* stack.destroy();
+
+        const initial = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("IdempotentRedeployStream", {
+              retentionPeriodHours: 36,
+            });
+          }),
+        );
+
+        const second = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("IdempotentRedeployStream", {
+              retentionPeriodHours: 36,
+            });
+          }),
+        );
+        expect(second.streamArn).toEqual(initial.streamArn);
+        expect(second.streamName).toEqual(initial.streamName);
+        expect(second.retentionPeriodHours).toEqual(36);
+
+        const summary = yield* Kinesis.describeStreamSummary({
+          StreamName: second.streamName,
+        });
+        expect(summary.StreamDescriptionSummary.RetentionPeriodHours).toEqual(
+          36,
+        );
+
+        yield* stack.destroy();
+        yield* assertStreamDeleted(initial.streamName);
+      }),
+    { timeout: 180_000 },
+  );
+
+  test.provider(
+    "reconcile resets shard count drift",
+    (stack) =>
+      Effect.gen(function* () {
+        yield* stack.destroy();
+
+        const initial = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("ShardDriftStream", {
+              streamMode: "PROVISIONED",
+              shardCount: 1,
+            });
+          }),
+        );
+        expect(initial.openShardCount).toEqual(1);
+
+        // Mutate shard count out of band.
+        yield* Kinesis.updateShardCount({
+          StreamName: initial.streamName,
+          TargetShardCount: 2,
+          ScalingType: "UNIFORM_SCALING",
+        });
+        yield* waitForShardCount(initial.streamName, 2);
+
+        // Re-deploy with the original shard count — reconcile must converge.
+        const redeployed = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("ShardDriftStream", {
+              streamMode: "PROVISIONED",
+              shardCount: 1,
+            });
+          }),
+        );
+        expect(redeployed.streamArn).toEqual(initial.streamArn);
+        yield* waitForShardCount(initial.streamName, 1);
+
+        yield* stack.destroy();
+        yield* assertStreamDeleted(initial.streamName);
+      }),
+    { timeout: 360_000 },
+  );
+
+  test.provider(
+    "reconcile resets retention period drift",
+    (stack) =>
+      Effect.gen(function* () {
+        yield* stack.destroy();
+
+        const initial = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("RetentionDriftStream", {
+              retentionPeriodHours: 24,
+            });
+          }),
+        );
+
+        // Drift retention out of band.
+        yield* Kinesis.increaseStreamRetentionPeriod({
+          StreamName: initial.streamName,
+          RetentionPeriodHours: 72,
+        });
+        yield* waitForRetentionHours(initial.streamName, 72);
+
+        // Re-deploy with the original retention — reconcile must reset it.
+        yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("RetentionDriftStream", {
+              retentionPeriodHours: 24,
+            });
+          }),
+        );
+        yield* waitForRetentionHours(initial.streamName, 24);
+
+        yield* stack.destroy();
+        yield* assertStreamDeleted(initial.streamName);
+      }),
+    { timeout: 240_000 },
+  );
+
+  test.provider(
+    "reconcile resets shard-level metrics drift",
+    (stack) =>
+      Effect.gen(function* () {
+        yield* stack.destroy();
+
+        const initial = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("MetricsDriftStream", {
+              shardLevelMetrics: ["IncomingBytes"],
+            });
+          }),
+        );
+
+        // Enable an extra metric out of band.
+        yield* Kinesis.enableEnhancedMonitoring({
+          StreamName: initial.streamName,
+          ShardLevelMetrics: ["OutgoingBytes"],
+        });
+
+        // Re-deploy with the original metrics — reconcile must remove
+        // the drifted metric.
+        yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("MetricsDriftStream", {
+              shardLevelMetrics: ["IncomingBytes"],
+            });
+          }),
+        );
+
+        const summary = yield* Kinesis.describeStreamSummary({
+          StreamName: initial.streamName,
+        });
+        const metrics =
+          summary.StreamDescriptionSummary.EnhancedMonitoring?.[0]
+            ?.ShardLevelMetrics ?? [];
+        expect(metrics).toContain("IncomingBytes");
+        expect(metrics).not.toContain("OutgoingBytes");
+
+        yield* stack.destroy();
+        yield* assertStreamDeleted(initial.streamName);
+      }),
+    { timeout: 240_000 },
+  );
+
+  test.provider(
+    "reconcile re-creates a stream that was deleted out-of-band",
+    (stack) =>
+      Effect.gen(function* () {
+        yield* stack.destroy();
+
+        const streamName = `alchemy-test-kinesis-recreate-${Math.random()
+          .toString(36)
+          .slice(2, 8)}`;
+
+        const initial = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("RecreateStream", { streamName });
+          }),
+        );
+
+        // Delete the stream out of band and wait for AWS to fully drop it.
+        yield* Kinesis.deleteStream({
+          StreamName: initial.streamName,
+          EnforceConsumerDeletion: true,
+        });
+        yield* assertStreamDeleted(streamName);
+
+        // Re-deploying must converge by re-creating.
+        const recreated = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("RecreateStream", { streamName });
+          }),
+        );
+
+        expect(recreated.streamName).toEqual(streamName);
+        expect(recreated.streamStatus).toEqual("ACTIVE");
+
+        const summary = yield* Kinesis.describeStreamSummary({
+          StreamName: streamName,
+        });
+        expect(summary.StreamDescriptionSummary.StreamStatus).toEqual("ACTIVE");
+
+        yield* stack.destroy();
+        yield* assertStreamDeleted(streamName);
+      }),
+    { timeout: 360_000 },
+  );
+
+  test.provider(
+    "changing streamName triggers replace, old stream is deleted",
+    (stack) =>
+      Effect.gen(function* () {
+        yield* stack.destroy();
+
+        const suffix = Math.random().toString(36).slice(2, 8);
+        const nameA = `alchemy-test-kinesis-replace-a-${suffix}`;
+        const nameB = `alchemy-test-kinesis-replace-b-${suffix}`;
+
+        const a = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("RenameStream", { streamName: nameA });
+          }),
+        );
+        expect(a.streamName).toEqual(nameA);
+
+        const b = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("RenameStream", { streamName: nameB });
+          }),
+        );
+        expect(b.streamName).toEqual(nameB);
+        expect(b.streamArn).not.toEqual(a.streamArn);
+
+        // The old stream must be gone after replace.
+        yield* assertStreamDeleted(nameA);
+
+        yield* stack.destroy();
+        yield* assertStreamDeleted(nameB);
+      }),
+    { timeout: 360_000 },
+  );
+
+  test.provider(
+    "scale provisioned shard count up and back down",
+    (stack) =>
+      Effect.gen(function* () {
+        yield* stack.destroy();
+
+        const initial = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("ShardScaleStream", {
+              streamMode: "PROVISIONED",
+              shardCount: 1,
+            });
+          }),
+        );
+        expect(initial.openShardCount).toEqual(1);
+
+        const scaledUp = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("ShardScaleStream", {
+              streamMode: "PROVISIONED",
+              shardCount: 2,
+            });
+          }),
+        );
+        expect(scaledUp.streamArn).toEqual(initial.streamArn);
+        yield* waitForShardCount(initial.streamName, 2);
+
+        const scaledDown = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("ShardScaleStream", {
+              streamMode: "PROVISIONED",
+              shardCount: 1,
+            });
+          }),
+        );
+        expect(scaledDown.streamArn).toEqual(initial.streamArn);
+        yield* waitForShardCount(initial.streamName, 1);
+
+        yield* stack.destroy();
+        yield* assertStreamDeleted(initial.streamName);
+      }),
+    { timeout: 480_000 },
+  );
+
+  test.provider(
+    "toggle stream mode on-demand <-> provisioned",
+    (stack) =>
+      Effect.gen(function* () {
+        yield* stack.destroy();
+
+        const onDemand = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("ModeToggleStream", {
+              streamMode: "ON_DEMAND",
+            });
+          }),
+        );
+        expect(onDemand.streamMode).toEqual("ON_DEMAND");
+
+        const provisioned = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("ModeToggleStream", {
+              streamMode: "PROVISIONED",
+              shardCount: 1,
+            });
+          }),
+        );
+        expect(provisioned.streamArn).toEqual(onDemand.streamArn);
+
+        const summary = yield* Kinesis.describeStreamSummary({
+          StreamName: provisioned.streamName,
+        });
+        expect(
+          summary.StreamDescriptionSummary.StreamModeDetails?.StreamMode,
+        ).toEqual("PROVISIONED");
+
+        const backToOnDemand = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("ModeToggleStream", {
+              streamMode: "ON_DEMAND",
+            });
+          }),
+        );
+        expect(backToOnDemand.streamArn).toEqual(onDemand.streamArn);
+
+        const finalSummary = yield* Kinesis.describeStreamSummary({
+          StreamName: backToOnDemand.streamName,
+        });
+        expect(
+          finalSummary.StreamDescriptionSummary.StreamModeDetails?.StreamMode,
+        ).toEqual("ON_DEMAND");
+
+        yield* stack.destroy();
+        yield* assertStreamDeleted(onDemand.streamName);
+      }),
+    { timeout: 480_000 },
+  );
+
+  test.provider(
+    "destroying an already-deleted stream is a no-op",
+    (stack) =>
+      Effect.gen(function* () {
+        yield* stack.destroy();
+
+        const stream = yield* stack.deploy(
+          Effect.gen(function* () {
+            return yield* Stream("DoubleDestroyStream");
+          }),
+        );
+
+        // Delete the stream out of band, then ask the engine to destroy it.
+        // Provider's `delete` must catch ResourceNotFoundException and
+        // complete cleanly.
+        yield* Kinesis.deleteStream({
+          StreamName: stream.streamName,
+          EnforceConsumerDeletion: true,
+        });
+        yield* assertStreamDeleted(stream.streamName);
+
+        yield* stack.destroy();
+      }),
+    { timeout: 240_000 },
+  );
+
+  class ShardCountMismatch extends Data.TaggedError("ShardCountMismatch") {}
+  class RetentionMismatch extends Data.TaggedError("RetentionMismatch") {}
+
+  /** Poll DescribeStreamSummary until the stream reports the expected shard count. */
+  const waitForShardCount = Effect.fn(function* (
+    streamName: string,
+    expected: number,
+  ) {
+    yield* Effect.gen(function* () {
+      const { StreamDescriptionSummary } = yield* Kinesis.describeStreamSummary(
+        { StreamName: streamName },
+      );
+      if (
+        StreamDescriptionSummary.StreamStatus !== "ACTIVE" ||
+        StreamDescriptionSummary.OpenShardCount !== expected
+      ) {
+        return yield* Effect.fail(new ShardCountMismatch());
+      }
+    }).pipe(
+      Effect.retry({
+        while: (e: { _tag: string }) =>
+          e._tag === "ShardCountMismatch" || e._tag === "ParseError",
+        schedule: Schedule.exponential(500).pipe(
+          Schedule.both(Schedule.recurs(60)),
+        ),
+      }),
+    );
+  });
+
+  /** Poll DescribeStreamSummary until the stream reports the expected retention period. */
+  const waitForRetentionHours = Effect.fn(function* (
+    streamName: string,
+    expected: number,
+  ) {
+    yield* Effect.gen(function* () {
+      const { StreamDescriptionSummary } = yield* Kinesis.describeStreamSummary(
+        { StreamName: streamName },
+      );
+      if (StreamDescriptionSummary.RetentionPeriodHours !== expected) {
+        return yield* Effect.fail(new RetentionMismatch());
+      }
+    }).pipe(
+      Effect.retry({
+        while: (e: { _tag: string }) =>
+          e._tag === "RetentionMismatch" || e._tag === "ParseError",
+        schedule: Schedule.fixed("500 millis").pipe(
+          Schedule.both(Schedule.recurs(40)),
+        ),
+      }),
+    );
+  });
+
   class StreamStillExists extends Data.TaggedError("StreamStillExists") {}
 
   const assertStreamDeleted = Effect.fn(function* (streamName: string) {

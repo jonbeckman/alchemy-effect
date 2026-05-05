@@ -403,6 +403,28 @@ const waitForStreamActive = (streamName: string) =>
     }),
   );
 
+// Mutation operations (updateShardCount, startStreamEncryption,
+// increaseStreamRetentionPeriod, etc.) reject with `ResourceInUseException`
+// when the stream is mid-update from a previous mutation, and may bounce
+// `LimitExceededException` under throttling. Retry both for ~60s — long
+// enough to ride out a single in-flight mutation but bounded so a stuck
+// stream doesn't loop forever. `waitForStreamActive` already paces between
+// ops in the happy path; this handles the race where Kinesis briefly
+// reports ACTIVE before the next call sees UPDATING.
+const retryMutationConflicts = <A, E extends { _tag: string }, R>(
+  effect: Effect.Effect<A, E, R>,
+) =>
+  effect.pipe(
+    Effect.retry({
+      while: (e: { _tag: string }) =>
+        e._tag === "ResourceInUseException" ||
+        e._tag === "LimitExceededException",
+      schedule: Schedule.exponential(500).pipe(
+        Schedule.both(Schedule.recurs(60)),
+      ),
+    }),
+  );
+
 const waitForStreamDeleted = (streamName: string) =>
   Effect.gen(function* () {
     yield* kinesis.describeStreamSummary({
@@ -469,7 +491,10 @@ export const StreamProvider = () =>
           // Ensure — create the stream if it's missing. Tolerate
           // `ResourceInUseException` as a race with a peer reconciler:
           // re-read and continue with the sync path. Retry transient
-          // `LimitExceededException`.
+          // `LimitExceededException` — Kinesis throws it whenever
+          // five+ streams are in CREATING state at once. Cap the retry
+          // schedule so a persistently saturated account fails loud
+          // instead of looping forever.
           if (state === undefined) {
             yield* kinesis
               .createStream({
@@ -487,7 +512,9 @@ export const StreamProvider = () =>
                 Effect.catchTag("ResourceInUseException", () => Effect.void),
                 Effect.retry({
                   while: (e: any) => e._tag === "LimitExceededException",
-                  schedule: Schedule.exponential(1000),
+                  schedule: Schedule.exponential(1000).pipe(
+                    Schedule.both(Schedule.recurs(20)),
+                  ),
                 }),
               );
 
@@ -505,14 +532,16 @@ export const StreamProvider = () =>
           // Sync stream mode — observed ↔ desired.
           const desiredMode = news.streamMode ?? defaultStreamMode;
           if (state.streamMode !== desiredMode) {
-            yield* kinesis.updateStreamMode({
-              StreamARN: streamArn,
-              StreamModeDetails: getStreamMode(news),
-              WarmThroughputMiBps:
-                desiredMode === "ON_DEMAND"
-                  ? news.warmThroughputMiBps
-                  : undefined,
-            });
+            yield* retryMutationConflicts(
+              kinesis.updateStreamMode({
+                StreamARN: streamArn,
+                StreamModeDetails: getStreamMode(news),
+                WarmThroughputMiBps:
+                  desiredMode === "ON_DEMAND"
+                    ? news.warmThroughputMiBps
+                    : undefined,
+              }),
+            );
             yield* waitForStreamActive(streamName);
             yield* session.note(`Updated stream mode to ${desiredMode}`);
             state = yield* readStream({ streamName, streamArn });
@@ -529,11 +558,13 @@ export const StreamProvider = () =>
             news.shardCount !== undefined &&
             state.openShardCount !== news.shardCount
           ) {
-            yield* kinesis.updateShardCount({
-              StreamName: streamName,
-              TargetShardCount: news.shardCount,
-              ScalingType: "UNIFORM_SCALING",
-            });
+            yield* retryMutationConflicts(
+              kinesis.updateShardCount({
+                StreamName: streamName,
+                TargetShardCount: news.shardCount,
+                ScalingType: "UNIFORM_SCALING",
+              }),
+            );
             yield* waitForStreamActive(streamName);
             yield* session.note(`Updated shard count to ${news.shardCount}`);
           }
@@ -543,15 +574,19 @@ export const StreamProvider = () =>
             news.retentionPeriodHours ?? defaultRetentionPeriodHours;
           if (state.retentionPeriodHours !== desiredRetention) {
             if (desiredRetention > state.retentionPeriodHours) {
-              yield* kinesis.increaseStreamRetentionPeriod({
-                StreamName: streamName,
-                RetentionPeriodHours: desiredRetention,
-              });
+              yield* retryMutationConflicts(
+                kinesis.increaseStreamRetentionPeriod({
+                  StreamName: streamName,
+                  RetentionPeriodHours: desiredRetention,
+                }),
+              );
             } else {
-              yield* kinesis.decreaseStreamRetentionPeriod({
-                StreamName: streamName,
-                RetentionPeriodHours: desiredRetention,
-              });
+              yield* retryMutationConflicts(
+                kinesis.decreaseStreamRetentionPeriod({
+                  StreamName: streamName,
+                  RetentionPeriodHours: desiredRetention,
+                }),
+              );
             }
             yield* waitForStreamActive(streamName);
             yield* session.note(
@@ -564,19 +599,23 @@ export const StreamProvider = () =>
           const desiredKmsKey = news.kmsKeyId ?? "alias/aws/kinesis";
           const observedEncryption = state.encryptionType === "KMS";
           if (!observedEncryption && desiredEncryption) {
-            yield* kinesis.startStreamEncryption({
-              StreamName: streamName,
-              EncryptionType: "KMS",
-              KeyId: desiredKmsKey,
-            });
+            yield* retryMutationConflicts(
+              kinesis.startStreamEncryption({
+                StreamName: streamName,
+                EncryptionType: "KMS",
+                KeyId: desiredKmsKey,
+              }),
+            );
             yield* waitForStreamActive(streamName);
             yield* session.note("Enabled encryption");
           } else if (observedEncryption && !desiredEncryption) {
-            yield* kinesis.stopStreamEncryption({
-              StreamName: streamName,
-              EncryptionType: "KMS",
-              KeyId: state.kmsKeyId ?? desiredKmsKey,
-            });
+            yield* retryMutationConflicts(
+              kinesis.stopStreamEncryption({
+                StreamName: streamName,
+                EncryptionType: "KMS",
+                KeyId: state.kmsKeyId ?? desiredKmsKey,
+              }),
+            );
             yield* waitForStreamActive(streamName);
             yield* session.note("Disabled encryption");
           } else if (
@@ -585,11 +624,13 @@ export const StreamProvider = () =>
             news.kmsKeyId !== undefined &&
             state.kmsKeyId !== news.kmsKeyId
           ) {
-            yield* kinesis.startStreamEncryption({
-              StreamName: streamName,
-              EncryptionType: "KMS",
-              KeyId: news.kmsKeyId,
-            });
+            yield* retryMutationConflicts(
+              kinesis.startStreamEncryption({
+                StreamName: streamName,
+                EncryptionType: "KMS",
+                KeyId: news.kmsKeyId,
+              }),
+            );
             yield* waitForStreamActive(streamName);
             yield* session.note("Updated KMS key");
           }
@@ -605,10 +646,12 @@ export const StreamProvider = () =>
           );
 
           if (metricsToDisable.length > 0) {
-            yield* kinesis.disableEnhancedMonitoring({
-              StreamName: streamName,
-              ShardLevelMetrics: metricsToDisable,
-            });
+            yield* retryMutationConflicts(
+              kinesis.disableEnhancedMonitoring({
+                StreamName: streamName,
+                ShardLevelMetrics: metricsToDisable,
+              }),
+            );
             yield* waitForStreamActive(streamName);
             yield* session.note(
               `Disabled metrics: ${metricsToDisable.join(", ")}`,
@@ -616,10 +659,12 @@ export const StreamProvider = () =>
           }
 
           if (metricsToEnable.length > 0) {
-            yield* kinesis.enableEnhancedMonitoring({
-              StreamName: streamName,
-              ShardLevelMetrics: metricsToEnable,
-            });
+            yield* retryMutationConflicts(
+              kinesis.enableEnhancedMonitoring({
+                StreamName: streamName,
+                ShardLevelMetrics: metricsToEnable,
+              }),
+            );
             yield* waitForStreamActive(streamName);
             yield* session.note(
               `Enabled metrics: ${metricsToEnable.join(", ")}`,
@@ -632,10 +677,12 @@ export const StreamProvider = () =>
             news.warmThroughputMiBps !== undefined &&
             state.warmThroughput?.targetMiBps !== news.warmThroughputMiBps
           ) {
-            yield* kinesis.updateStreamWarmThroughput({
-              StreamARN: streamArn,
-              WarmThroughputMiBps: news.warmThroughputMiBps,
-            });
+            yield* retryMutationConflicts(
+              kinesis.updateStreamWarmThroughput({
+                StreamARN: streamArn,
+                WarmThroughputMiBps: news.warmThroughputMiBps,
+              }),
+            );
             yield* waitForStreamActive(streamName);
             yield* session.note(
               `Updated warm throughput to ${news.warmThroughputMiBps} MiBps`,
@@ -647,10 +694,12 @@ export const StreamProvider = () =>
             news.maxRecordSizeInKiB !== undefined &&
             state.maxRecordSizeInKiB !== news.maxRecordSizeInKiB
           ) {
-            yield* kinesis.updateMaxRecordSize({
-              StreamARN: streamArn,
-              MaxRecordSizeInKiB: news.maxRecordSizeInKiB,
-            });
+            yield* retryMutationConflicts(
+              kinesis.updateMaxRecordSize({
+                StreamARN: streamArn,
+                MaxRecordSizeInKiB: news.maxRecordSizeInKiB,
+              }),
+            );
             yield* waitForStreamActive(streamName);
             yield* session.note(
               `Updated max record size to ${news.maxRecordSizeInKiB} KiB`,
@@ -718,14 +767,20 @@ export const StreamProvider = () =>
           return final;
         }),
         delete: Effect.fn(function* ({ output }) {
-          yield* kinesis
-            .deleteStream({
+          // `deleteStream` rejects with `ResourceInUseException` if the
+          // stream is mid-update (e.g. shard reshape from a prior reconcile)
+          // and `LimitExceededException` if 5+ streams are already in
+          // DELETING state. Both are transient — retry on the same bounded
+          // schedule we use for mutation conflicts. `ResourceNotFoundException`
+          // means somebody beat us to it; that's success for delete.
+          yield* retryMutationConflicts(
+            kinesis.deleteStream({
               StreamName: output.streamName,
               EnforceConsumerDeletion: true,
-            })
-            .pipe(
-              Effect.catchTag("ResourceNotFoundException", () => Effect.void),
-            );
+            }),
+          ).pipe(
+            Effect.catchTag("ResourceNotFoundException", () => Effect.void),
+          );
 
           yield* waitForStreamDeleted(output.streamName);
         }),
