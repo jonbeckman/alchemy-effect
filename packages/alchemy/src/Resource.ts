@@ -41,15 +41,15 @@ export type ResourceConstructor<R extends ResourceLike, Req = never> = {
    * tuple the positional `Resource(id, props)` form accepts.
    */
   <Args extends readonly unknown[], PropsReq = never>(
-    factory: (...args: Args) => readonly [
+    factory: (
+      ...args: Args
+    ) => readonly [
       id: string,
       props:
         | InputProps<R["Props"]>
         | Effect.Effect<InputProps<R["Props"]>, never, PropsReq>,
     ],
-  ): ((
-    ...args: Args
-  ) => Effect.Effect<R, never, Req | PropsReq>) & {
+  ): ((...args: Args) => Effect.Effect<R, never, Req | PropsReq>) & {
     readonly [FACTORY_MARKER]: true;
   };
 };
@@ -319,9 +319,7 @@ export function Resource<R extends ResourceLike>(
         // Factory form: the user's function returns `[id, props]`,
         // which we apply to the resource constructor. See `Factory.ts`
         // for how the factory args are persisted into Props.env.
-        const tupleFactory = args[0] as (
-          ...a: any[]
-        ) => readonly [string, any];
+        const tupleFactory = args[0] as (...a: any[]) => readonly [string, any];
         const inner = (...factoryArgs: any[]) => {
           const [id, props] = tupleFactory(...factoryArgs);
           return constructor(id, props);

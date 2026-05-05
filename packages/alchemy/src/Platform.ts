@@ -194,7 +194,9 @@ export interface Platform<
     PropsReq = never,
     InitReq extends Services | PlatformServices = never,
   >(
-    factory: (...args: Args) => readonly [
+    factory: (
+      ...args: Args
+    ) => readonly [
       id: string,
       props:
         | InputProps<Resource["Props"]>
