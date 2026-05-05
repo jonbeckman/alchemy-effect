@@ -1,4 +1,5 @@
 import * as route53 from "@distilled.cloud/aws/route-53";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schedule from "effect/Schedule";
 import { isResolved } from "../../Diff.ts";
@@ -162,7 +163,7 @@ const toRecordSet = (props: RecordProps): route53.ResourceRecordSet => ({
         HostedZoneId: normalizeHostedZoneId(
           props.aliasTarget.hostedZoneId as string,
         ),
-        DNSName: props.aliasTarget.dnsName as string,
+        DNSName: normalizeName(props.aliasTarget.dnsName as string),
         EvaluateTargetHealth: props.aliasTarget.evaluateTargetHealth ?? false,
       }
     : undefined,
@@ -181,41 +182,111 @@ const toAttrs = (
   setIdentifier: recordSet.SetIdentifier,
 });
 
+const recordSetMatches = (
+  observed: route53.ResourceRecordSet,
+  desired: route53.ResourceRecordSet,
+) => {
+  if (observed.Name !== desired.Name) return false;
+  if (observed.Type !== desired.Type) return false;
+  if ((observed.SetIdentifier ?? undefined) !== desired.SetIdentifier)
+    return false;
+  if ((observed.TTL ?? undefined) !== desired.TTL) return false;
+  const observedValues = (observed.ResourceRecords ?? [])
+    .map((r) => r.Value)
+    .sort();
+  const desiredValues = (desired.ResourceRecords ?? [])
+    .map((r) => r.Value)
+    .sort();
+  if (observedValues.length !== desiredValues.length) return false;
+  if (observedValues.some((v, i) => v !== desiredValues[i])) return false;
+  if ((observed.AliasTarget ?? undefined) === undefined) {
+    if ((desired.AliasTarget ?? undefined) !== undefined) return false;
+  } else {
+    if ((desired.AliasTarget ?? undefined) === undefined) return false;
+    const a = observed.AliasTarget!;
+    const b = desired.AliasTarget!;
+    if (normalizeHostedZoneId(a.HostedZoneId) !== b.HostedZoneId) return false;
+    if (normalizeName(a.DNSName) !== b.DNSName) return false;
+    if ((a.EvaluateTargetHealth ?? false) !== (b.EvaluateTargetHealth ?? false))
+      return false;
+  }
+  return true;
+};
+
+class Route53ChangePending extends Data.TaggedError(
+  "Route53ChangePending",
+)<{
+  changeId: string;
+}> {}
+
+class Route53RecordNotVisible extends Data.TaggedError(
+  "Route53RecordNotVisible",
+)<{
+  hostedZoneId: string;
+  name: string;
+  type: string;
+}> {}
+
 export const RecordProvider = () =>
   Provider.effect(
     Record,
     Effect.gen(function* () {
-      const waitForChange = Effect.fn(function* (changeId: string) {
+      // PriorRequestNotComplete is thrown when concurrent change batches
+      // target the same hosted zone. AWS classifies it as a BadRequestError
+      // in the Smithy model, so it's not auto-retried by the AWS retry layer.
+      // Wrap each mutating call to retry explicitly with bounded backoff.
+      const retryOnConcurrentChange = <A, E, R>(
+        eff: Effect.Effect<A, E, R>,
+      ): Effect.Effect<A, E, R> =>
+        eff.pipe(
+          Effect.retry({
+            while: (e) =>
+              (e as { _tag?: string })._tag === "PriorRequestNotComplete",
+            schedule: Schedule.exponential("250 millis", 2).pipe(
+              Schedule.either(Schedule.spaced("4 seconds")),
+              Schedule.both(Schedule.recurs(20)),
+            ),
+          }),
+        );
+
+      const waitForChange = Effect.fn("Route53.waitForChange")(function* (
+        changeId: string,
+      ) {
         return yield* route53.getChange({ Id: changeId }).pipe(
+          retryOnConcurrentChange,
           Effect.map((response) => response.ChangeInfo),
           Effect.flatMap((changeInfo) =>
             changeInfo.Status === "INSYNC"
               ? Effect.succeed(changeInfo)
-              : Effect.die(new Error("Route53ChangePending")),
+              : Effect.fail(new Route53ChangePending({ changeId })),
           ),
           Effect.retry({
             while: (error) =>
-              error instanceof Error &&
-              error.message === "Route53ChangePending",
+              (error as { _tag?: string })._tag === "Route53ChangePending",
             schedule: Schedule.fixed("2 seconds").pipe(
-              Schedule.both(Schedule.recurs(60)),
+              Schedule.both(Schedule.recurs(150)),
             ),
           }),
         );
       });
 
-      const findRecord = Effect.fn(function* (
+      const findRecord = Effect.fn("Route53.findRecord")(function* (
         hostedZoneId: string,
         props: Pick<RecordProps, "name" | "type" | "setIdentifier">,
       ) {
+        const targetName = normalizeName(props.name);
         const response = yield* route53
           .listResourceRecordSets({
             HostedZoneId: normalizeHostedZoneId(hostedZoneId),
-            StartRecordName: normalizeName(props.name),
+            StartRecordName: targetName,
             StartRecordType: props.type,
+            StartRecordIdentifier: props.setIdentifier,
             MaxItems: 100,
           })
           .pipe(
+            retryOnConcurrentChange,
+            // The hosted zone may have raced away between read and find;
+            // treat that the same as a missing record.
             Effect.catchTag("NoSuchHostedZone", () =>
               Effect.succeed(undefined),
             ),
@@ -223,25 +294,29 @@ export const RecordProvider = () =>
 
         return response?.ResourceRecordSets.find(
           (recordSet) =>
-            recordSet.Name === normalizeName(props.name) &&
+            recordSet.Name === targetName &&
             recordSet.Type === props.type &&
             (recordSet.SetIdentifier ?? undefined) === props.setIdentifier,
         );
       });
 
-      const upsertRecord = Effect.fn(function* (props: RecordProps) {
-        const response = yield* route53.changeResourceRecordSets({
-          HostedZoneId: normalizeHostedZoneId(props.hostedZoneId),
-          ChangeBatch: {
-            Comment: "Alchemy Route53 record upsert",
-            Changes: [
-              {
-                Action: "UPSERT",
-                ResourceRecordSet: toRecordSet(props),
-              },
-            ],
-          },
-        });
+      const upsertRecord = Effect.fn("Route53.upsertRecord")(function* (
+        props: RecordProps,
+      ) {
+        const response = yield* route53
+          .changeResourceRecordSets({
+            HostedZoneId: normalizeHostedZoneId(props.hostedZoneId),
+            ChangeBatch: {
+              Comment: "Alchemy Route53 record upsert",
+              Changes: [
+                {
+                  Action: "UPSERT",
+                  ResourceRecordSet: toRecordSet(props),
+                },
+              ],
+            },
+          })
+          .pipe(retryOnConcurrentChange);
 
         yield* waitForChange(response.ChangeInfo.Id);
       });
@@ -277,26 +352,69 @@ export const RecordProvider = () =>
           return toAttrs(recordSet, output?.hostedZoneId ?? olds!.hostedZoneId);
         }),
         reconcile: Effect.fn(function* ({ news, session }) {
-          // Route 53 `changeResourceRecordSets` with `UPSERT` is naturally
-          // reconciler-friendly: it creates the record if missing and
-          // overwrites it if present. There's no separate ensure/sync split
-          // — one call converges to the desired record set.
-          yield* upsertRecord(news);
+          // Observe — read the record's current cloud state, then only
+          // upsert if it diverges from desired. Skipping the no-op API
+          // call avoids racking up `PriorRequestNotComplete` retries
+          // when many records share a hosted zone and are deployed in
+          // a single pass with no actual changes.
+          const desired = toRecordSet(news);
+          const observed = yield* findRecord(news.hostedZoneId, news);
 
-          // Re-read so the returned attributes reflect the actual current
-          // record (including server-applied defaults).
-          const recordSet = yield* findRecord(news.hostedZoneId, news);
-
-          if (!recordSet) {
-            return yield* Effect.die(
-              new Error("Route53 record was not found after upsert"),
-            );
+          if (observed === undefined || !recordSetMatches(observed, desired)) {
+            yield* upsertRecord(news);
           }
 
+          // Re-read so the returned attributes reflect the actual current
+          // record (including server-applied defaults) regardless of
+          // whether we just wrote. Route53 reads can briefly miss a
+          // freshly INSYNC change against a different name server, so
+          // retry on a short bounded schedule before declaring failure.
+          const finalRecord = yield* findRecord(news.hostedZoneId, news).pipe(
+            Effect.flatMap((r) =>
+              r
+                ? Effect.succeed(r)
+                : Effect.fail(
+                    new Route53RecordNotVisible({
+                      hostedZoneId: news.hostedZoneId,
+                      name: normalizeName(news.name),
+                      type: news.type,
+                    }),
+                  ),
+            ),
+            Effect.retry({
+              while: (e) =>
+                (e as { _tag?: string })._tag === "Route53RecordNotVisible",
+              schedule: Schedule.fixed("2 seconds").pipe(
+                Schedule.both(Schedule.recurs(5)),
+              ),
+            }),
+          );
+
           yield* session.note(`${news.type} ${normalizeName(news.name)}`);
-          return toAttrs(recordSet, news.hostedZoneId);
+          return toAttrs(finalRecord, news.hostedZoneId);
         }),
         delete: Effect.fn(function* ({ output }) {
+          // The record may have been removed out-of-band, or the hosted
+          // zone itself may be gone. Both are no-ops for delete.
+          //
+          // We deliberately do NOT swallow `InvalidChangeBatch` blanket-
+          // wide — it covers a spectrum of validation failures (bad TTL,
+          // malformed alias target, etc.) and silently dropping those
+          // would let a broken delete look successful. Instead, observe
+          // the record first; if it's gone, exit cleanly without
+          // submitting a change batch at all.
+          // `findRecord` already swallows `NoSuchHostedZone` and returns
+          // `undefined`, so we don't need to handle it here.
+          const observed = yield* findRecord(output.hostedZoneId, {
+            name: output.name,
+            type: output.type,
+            setIdentifier: output.setIdentifier,
+          });
+
+          if (!observed) {
+            return;
+          }
+
           yield* route53
             .changeResourceRecordSets({
               HostedZoneId: normalizeHostedZoneId(output.hostedZoneId),
@@ -305,35 +423,34 @@ export const RecordProvider = () =>
                 Changes: [
                   {
                     Action: "DELETE",
-                    ResourceRecordSet: {
-                      Name: output.name,
-                      Type: output.type,
-                      SetIdentifier: output.setIdentifier,
-                      TTL: output.aliasTarget ? undefined : output.ttl,
-                      ResourceRecords: output.records?.map((Value) => ({
-                        Value,
-                      })),
-                      AliasTarget: output.aliasTarget
-                        ? {
-                            HostedZoneId: normalizeHostedZoneId(
-                              output.aliasTarget.hostedZoneId as string,
-                            ),
-                            DNSName: output.aliasTarget.dnsName as string,
-                            EvaluateTargetHealth:
-                              output.aliasTarget.evaluateTargetHealth ?? false,
-                          }
-                        : undefined,
-                    },
+                    // Delete must echo the *observed* record exactly,
+                    // not the cached `output` shape. Out-of-band drift
+                    // (e.g. someone bumped the TTL) would otherwise make
+                    // the delete fail with InvalidChangeBatch.
+                    ResourceRecordSet: observed,
                   },
                 ],
               },
             })
             .pipe(
+              retryOnConcurrentChange,
               Effect.flatMap((response) =>
                 waitForChange(response.ChangeInfo.Id),
               ),
               Effect.catchTag("NoSuchHostedZone", () => Effect.void),
-              Effect.catchTag("InvalidChangeBatch", () => Effect.void),
+              // A concurrent delete may have removed the record between
+              // our find and our DELETE call — InvalidChangeBatch with
+              // "not found" is the only `InvalidChangeBatch` we tolerate.
+              Effect.catchTag("InvalidChangeBatch", (error) => {
+                const messages = [
+                  ...(error.messages ?? []),
+                  error.message ?? "",
+                ].join(" ");
+                if (/not found|but it was not found/i.test(messages)) {
+                  return Effect.void;
+                }
+                return Effect.fail(error);
+              }),
             );
         }),
       };
