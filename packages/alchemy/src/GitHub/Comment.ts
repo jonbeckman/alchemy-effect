@@ -1,5 +1,6 @@
 import { Octokit } from "@octokit/rest";
 import * as Effect from "effect/Effect";
+import { isResolved } from "../Diff.ts";
 import * as Provider from "../Provider.ts";
 import { Resource } from "../Resource.ts";
 import { dedent } from "../Util/dedent.ts";
@@ -163,6 +164,21 @@ export const CommentProvider = () =>
   Provider.succeed(Comment, {
     stables: ["commentId"],
 
+    // The `(owner, repository, issueNumber)` tuple identifies the
+    // host issue/PR. A comment can't be moved between issues — change
+    // any of them and we must replace.
+    diff: Effect.fn(function* ({ news, olds }) {
+      if (!isResolved(news)) return undefined;
+      if (
+        news.owner !== olds.owner ||
+        news.repository !== olds.repository ||
+        news.issueNumber !== olds.issueNumber
+      ) {
+        return { action: "replace" } as const;
+      }
+      return undefined;
+    }),
+
     reconcile: Effect.fn(function* ({ news, output }) {
       const octokit = createClient(news);
       const body = dedent(news.body);
@@ -171,7 +187,7 @@ export const CommentProvider = () =>
       // state via the cached id; a 404 (deleted out-of-band, or never
       // created) collapses to "no observed comment" so we converge by
       // posting a fresh one.
-      const observedId = output?.commentId
+      const observed = output?.commentId
         ? yield* Effect.tryPromise({
             try: async () => {
               try {
@@ -180,7 +196,12 @@ export const CommentProvider = () =>
                   repo: news.repository,
                   comment_id: output.commentId,
                 });
-                return data.id;
+                return {
+                  id: data.id,
+                  body: data.body ?? "",
+                  htmlUrl: data.html_url,
+                  updatedAt: data.updated_at,
+                };
               } catch (error: any) {
                 if (error.status === 404) return undefined;
                 throw error;
@@ -191,7 +212,7 @@ export const CommentProvider = () =>
         : undefined;
 
       // Ensure — when no live comment exists, POST creates one.
-      if (observedId === undefined) {
+      if (observed === undefined) {
         const { data } = yield* Effect.tryPromise(() =>
           octokit.rest.issues.createComment({
             owner: news.owner,
@@ -207,21 +228,28 @@ export const CommentProvider = () =>
         };
       }
 
-      // Sync — PATCH the existing comment with the desired body. GitHub's
-      // updateComment is idempotent for identical bodies (returns same
-      // updatedAt), so we always issue the call rather than diffing.
-      const { data } = yield* Effect.tryPromise(() =>
-        octokit.rest.issues.updateComment({
-          owner: news.owner,
-          repo: news.repository,
-          comment_id: observedId,
-          body,
-        }),
-      );
+      // Sync — PATCH the existing comment only when the observed body
+      // drifted from desired. Skipping the call on no-op keeps redeploys
+      // with unchanged props quiet and preserves the prior `updatedAt`.
+      if (observed.body !== body) {
+        const { data } = yield* Effect.tryPromise(() =>
+          octokit.rest.issues.updateComment({
+            owner: news.owner,
+            repo: news.repository,
+            comment_id: observed.id,
+            body,
+          }),
+        );
+        return {
+          commentId: data.id,
+          htmlUrl: data.html_url,
+          updatedAt: data.updated_at,
+        };
+      }
       return {
-        commentId: data.id,
-        htmlUrl: data.html_url,
-        updatedAt: data.updated_at,
+        commentId: observed.id,
+        htmlUrl: observed.htmlUrl,
+        updatedAt: observed.updatedAt,
       };
     }),
 
@@ -232,6 +260,8 @@ export const CommentProvider = () =>
 
       const octokit = createClient(olds);
 
+      // Idempotent delete: 404 = already gone (deleted in the GitHub UI
+      // or by another process), which matches the desired terminal state.
       yield* Effect.tryPromise(async () => {
         try {
           await octokit.rest.issues.deleteComment({
