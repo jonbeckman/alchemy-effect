@@ -77,7 +77,8 @@ export interface VpcProps {
 
   /**
    * Whether instances launched in the VPC get DNS hostnames.
-   * @default true
+   * Matches the AWS API default for new non-default VPCs.
+   * @default false
    */
   enableDnsHostnames?: boolean;
 
@@ -256,31 +257,43 @@ export const VpcProvider = () =>
           const desiredDnsSupport = news.enableDnsSupport ?? true;
           const desiredDnsHostnames = news.enableDnsHostnames ?? false;
 
-          const dnsSupportResult = yield* ec2.describeVpcAttribute({
-            VpcId: vpcId,
-            Attribute: "enableDnsSupport",
-          });
+          // describeVpcAttribute right after createVpc can race ahead of the
+          // VPC's visibility in the read path even after `waitForVpcAvailable`
+          // succeeded. Tolerate a transient `InvalidVpcID.NotFound` so we
+          // don't surface it as a hard failure.
+          const dnsSupportResult = yield* ec2
+            .describeVpcAttribute({
+              VpcId: vpcId,
+              Attribute: "enableDnsSupport",
+            })
+            .pipe(retryEventuallyConsistent);
           const currentDnsSupport =
             dnsSupportResult.EnableDnsSupport?.Value ?? true;
           if (currentDnsSupport !== desiredDnsSupport) {
-            yield* ec2.modifyVpcAttribute({
-              VpcId: vpcId,
-              EnableDnsSupport: { Value: desiredDnsSupport },
-            });
+            yield* ec2
+              .modifyVpcAttribute({
+                VpcId: vpcId,
+                EnableDnsSupport: { Value: desiredDnsSupport },
+              })
+              .pipe(retryEventuallyConsistent);
             yield* session.note(`Updated DNS support: ${desiredDnsSupport}`);
           }
 
-          const dnsHostnamesResult = yield* ec2.describeVpcAttribute({
-            VpcId: vpcId,
-            Attribute: "enableDnsHostnames",
-          });
+          const dnsHostnamesResult = yield* ec2
+            .describeVpcAttribute({
+              VpcId: vpcId,
+              Attribute: "enableDnsHostnames",
+            })
+            .pipe(retryEventuallyConsistent);
           const currentDnsHostnames =
             dnsHostnamesResult.EnableDnsHostnames?.Value ?? false;
           if (currentDnsHostnames !== desiredDnsHostnames) {
-            yield* ec2.modifyVpcAttribute({
-              VpcId: vpcId,
-              EnableDnsHostnames: { Value: desiredDnsHostnames },
-            });
+            yield* ec2
+              .modifyVpcAttribute({
+                VpcId: vpcId,
+                EnableDnsHostnames: { Value: desiredDnsHostnames },
+              })
+              .pipe(retryEventuallyConsistent);
             yield* session.note(
               `Updated DNS hostnames: ${desiredDnsHostnames}`,
             );
@@ -292,28 +305,45 @@ export const VpcProvider = () =>
           ) as Record<string, string>;
           const { removed, upsert } = diffTags(currentTags, desiredTags);
           if (removed.length > 0) {
-            yield* ec2.deleteTags({
-              Resources: [vpcId],
-              Tags: removed.map((key) => ({ Key: key })),
-              DryRun: false,
-            });
+            yield* ec2
+              .deleteTags({
+                Resources: [vpcId],
+                Tags: removed.map((key) => ({ Key: key })),
+                DryRun: false,
+              })
+              .pipe(retryEventuallyConsistent);
           }
           if (upsert.length > 0) {
-            yield* ec2.createTags({
-              Resources: [vpcId],
-              Tags: upsert,
-              DryRun: false,
-            });
+            yield* ec2
+              .createTags({
+                Resources: [vpcId],
+                Tags: upsert,
+                DryRun: false,
+              })
+              .pipe(retryEventuallyConsistent);
           }
 
           // Re-read final state so the returned attributes reflect what's
-          // actually in the cloud after all sync steps.
-          const final = yield* ec2.describeVpcs({ VpcIds: [vpcId] });
+          // actually in the cloud after all sync steps. EC2 is eventually
+          // consistent, so a freshly-created VPC may briefly show as
+          // `InvalidVpcID.NotFound` here — treat that as "not yet visible"
+          // and retry rather than failing.
+          const final = yield* ec2
+            .describeVpcs({ VpcIds: [vpcId] })
+            .pipe(
+              Effect.catchTag("InvalidVpcID.NotFound", () =>
+                Effect.fail(new VpcPending({ vpcId, state: "describing" })),
+              ),
+              Effect.retry({
+                while: (e) => e instanceof VpcPending,
+                schedule: Schedule.fixed(1000).pipe(
+                  Schedule.both(Schedule.recurs(15)),
+                ),
+              }),
+            );
           const finalVpc = final.Vpcs?.[0];
           if (!finalVpc) {
-            return yield* Effect.fail(
-              new Error(`VPC ${vpcId} disappeared during reconcile`),
-            );
+            return yield* new VpcDisappeared({ vpcId });
           }
 
           return {
@@ -354,43 +384,32 @@ export const VpcProvider = () =>
 
           yield* session.note(`Deleting VPC: ${vpcId}`);
 
-          // 1. Attempt to delete VPC
+          // Attempt to delete the VPC. If it's already gone, that's a no-op.
+          // DependencyViolation means subnets/IGWs/SGs/route tables are still
+          // being torn down (or were created out of band) — bounded poll up
+          // to ~5 minutes. The DependencyViolation tag comes straight from
+          // distilled (`withDependencyViolationError`), no string matching.
           yield* ec2
             .deleteVpc({
               VpcId: vpcId,
               DryRun: false,
             })
             .pipe(
-              Effect.tapError(Effect.logDebug),
-              Effect.catchTag("InvalidVpcID.NotFound", () => Effect.void),
-              // Retry on dependency violations (resources still being deleted)
               Effect.retry({
-                while: (e) => {
-                  // DependencyViolation means there are still dependent resources
-                  // This can happen if subnets/IGW are being deleted concurrently
-                  return (
-                    e._tag === "DependencyViolation" ||
-                    (e._tag === "ValidationError" &&
-                      e.message?.includes("DependencyViolation"))
-                  );
-                },
-                // Use fixed 5s delay instead of exponential to avoid very long waits
+                while: (e) => e._tag === "DependencyViolation",
                 schedule: Schedule.fixed(5000).pipe(
-                  Schedule.both(Schedule.recurs(60)), // Up to 5 minutes total
+                  Schedule.both(Schedule.recurs(60)),
                   Schedule.tapOutput(([, attempt]) =>
                     session.note(
-                      `Waiting for dependencies to clear... (attempt ${attempt + 1})`,
+                      `Waiting for VPC dependencies to clear... (attempt ${attempt + 1})`,
                     ),
                   ),
                 ),
               }),
-              // Log the actual error for debugging
-              Effect.tapError((e) =>
-                session.note(`VPC delete failed: ${e._tag} - ${e.message}`),
-              ),
+              Effect.catchTag("InvalidVpcID.NotFound", () => Effect.void),
             );
 
-          // 2. Wait for VPC to be fully deleted
+          // Wait for the deletion to propagate.
           yield* waitForVpcDeleted(vpcId, session);
 
           yield* session.note(`VPC ${vpcId} deleted successfully`);
@@ -410,26 +429,55 @@ class VpcStillExists extends Data.TaggedError("VpcStillExists")<{
   vpcId: string;
 }> {}
 
+// Tagged failure for the rare case where a VPC vanishes mid-reconcile
+// (e.g. it was deleted out of band between createVpc and the final read).
+class VpcDisappeared extends Data.TaggedError("VpcDisappeared")<{
+  vpcId: string;
+}> {}
+
 /**
- * Wait for VPC to be in available state
+ * Pipe an EC2 effect through a bounded retry that rides out post-create
+ * eventual-consistency `InvalidVpcID.NotFound`. The general AWS retry layer
+ * doesn't ride this out because distilled doesn't tag it as retryable —
+ * but we know it's transient when we have just created the VPC ourselves.
+ */
+const retryEventuallyConsistent = <A, E, R>(
+  self: Effect.Effect<A, E, R>,
+): Effect.Effect<A, Exclude<E, { _tag: "InvalidVpcID.NotFound" }>, R> =>
+  self.pipe(
+    Effect.retry({
+      while: (e: any) => e?._tag === "InvalidVpcID.NotFound",
+      schedule: Schedule.fixed(1000).pipe(Schedule.both(Schedule.recurs(15))),
+    }),
+  ) as Effect.Effect<A, Exclude<E, { _tag: "InvalidVpcID.NotFound" }>, R>;
+
+/**
+ * Wait for VPC to be in available state. EC2 is eventually consistent, so
+ * `describeVpcs` immediately after `createVpc` may briefly return
+ * `InvalidVpcID.NotFound` — treat that as "still pending" instead of failing.
  */
 const waitForVpcAvailable = (
   vpcId: string,
   session?: ScopedPlanStatusSession,
 ) =>
   Effect.gen(function* () {
-    const result = yield* ec2.describeVpcs({ VpcIds: [vpcId] });
+    const result = yield* ec2
+      .describeVpcs({ VpcIds: [vpcId] })
+      .pipe(
+        Effect.catchTag("InvalidVpcID.NotFound", () =>
+          Effect.succeed({ Vpcs: [] as EC2.Vpc[] }),
+        ),
+      );
     const vpc = result.Vpcs?.[0];
 
     if (!vpc) {
-      return yield* Effect.fail(new Error(`VPC ${vpcId} not found`));
+      return yield* new VpcPending({ vpcId, state: "missing" });
     }
 
     if (vpc.State === "available") {
       return vpc;
     }
 
-    // Still pending - this is the only retryable case
     return yield* new VpcPending({ vpcId, state: vpc.State! });
   }).pipe(
     Effect.retry({
