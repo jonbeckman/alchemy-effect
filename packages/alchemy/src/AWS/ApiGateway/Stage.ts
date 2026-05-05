@@ -580,21 +580,29 @@ export const StageProvider = () =>
           // Ensure — create the stage if missing. `createStage` only sets
           // a subset of the configurable surface; the rest is applied via
           // updateStage in the sync step below.
+          //
+          // `ConflictException` here means another reconcile (or a prior
+          // attempt that couldn't persist state) raced us to the create.
+          // The stage exists; fall through to sync.
           if (!observed?.stageName) {
             yield* retryOnApiStatusUpdating(
-              ag.createStage({
-                restApiId: news.restApiId as string,
-                stageName: news.stageName,
-                deploymentId: news.deploymentId as string,
-                description: news.description,
-                cacheClusterEnabled: news.cacheClusterEnabled,
-                cacheClusterSize: news.cacheClusterSize,
-                variables: news.variables,
-                documentationVersion: news.documentationVersion,
-                canarySettings: news.canarySettings,
-                tracingEnabled: news.tracingEnabled,
-                tags: desiredTags,
-              }),
+              ag
+                .createStage({
+                  restApiId: news.restApiId as string,
+                  stageName: news.stageName,
+                  deploymentId: news.deploymentId as string,
+                  description: news.description,
+                  cacheClusterEnabled: news.cacheClusterEnabled,
+                  cacheClusterSize: news.cacheClusterSize,
+                  variables: news.variables,
+                  documentationVersion: news.documentationVersion,
+                  canarySettings: news.canarySettings,
+                  tracingEnabled: news.tracingEnabled,
+                  tags: desiredTags,
+                })
+                .pipe(
+                  Effect.catchTag("ConflictException", () => Effect.void),
+                ),
             );
             yield* session.note(`Created stage ${news.stageName}`);
             observed = yield* ag.getStage({

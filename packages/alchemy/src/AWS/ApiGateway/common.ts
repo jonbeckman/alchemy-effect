@@ -110,6 +110,27 @@ export const domainNameArn = (region: string, domainName: string) =>
 export const vpcLinkArn = (region: string, vpcLinkId: string) =>
   `arn:aws:apigateway:${region}::/vpclinks/${vpcLinkId}`;
 
+/**
+ * `untagResource` returns `BadRequestException` when one or more of the
+ * keys you ask to remove are not actually present on the resource. That's
+ * a no-op for our converge semantics: we wanted them gone, and they are.
+ *
+ * Any other `BadRequestException` (malformed key, invalid arn, missing
+ * required policy) must surface — silently swallowing every 4xx is what
+ * lets a real auth or arn-shape bug masquerade as "tags converged".
+ */
+const isTagKeyAbsentError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false;
+  if ((error as { _tag?: string })._tag !== "BadRequestException") return false;
+  const message = ((error as { message?: string }).message ?? "").toLowerCase();
+  return (
+    message.includes("tag key") &&
+    (message.includes("does not exist") ||
+      message.includes("not found") ||
+      message.includes("no such"))
+  );
+};
+
 export const syncTags = Effect.fn(function* ({
   resourceArn,
   oldTags,
@@ -128,7 +149,9 @@ export const syncTags = Effect.fn(function* ({
       })
       .pipe(
         Effect.catchTag("NotFoundException", () => Effect.void),
-        Effect.catchTag("BadRequestException", () => Effect.void),
+        Effect.catchTag("BadRequestException", (e) =>
+          isTagKeyAbsentError(e) ? Effect.void : Effect.fail(e),
+        ),
       );
   }
   if (upsert.length > 0) {
