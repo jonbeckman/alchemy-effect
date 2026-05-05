@@ -485,33 +485,46 @@ export const AiGatewayProvider = () =>
           const gatewayId =
             output?.gatewayId ?? (yield* createGatewayId(id, news.id));
 
-          // Observe — fetch the gateway's current state. The Cloudflare API
-          // returns 404 when the gateway is missing, which we tolerate so the
-          // reconciler can fall through to create.
-          const observed = yield* getAiGateway({
-            accountId: acct,
-            id: gatewayId,
-          }).pipe(
-            Effect.catchTag("GatewayNotFound", () => Effect.succeed(undefined)),
-          );
-
-          // Ensure — create if missing. Tolerate `GatewayAlreadyExists` for
+          // Ensure the gateway exists. Tolerate `GatewayAlreadyExists` for
           // idempotency: a peer reconciler may have created it concurrently,
           // or state persistence may have failed after a previous create.
-          if (observed === undefined) {
+          const ensure = Effect.gen(function* () {
+            const observed = yield* getAiGateway({
+              accountId: acct,
+              id: gatewayId,
+            }).pipe(
+              Effect.catchTag("GatewayNotFound", () =>
+                Effect.succeed(undefined),
+              ),
+            );
+            if (observed !== undefined) return;
             const request = yield* createRequest(id, news);
             yield* createAiGateway(request).pipe(
               Effect.catchTag("GatewayAlreadyExists", () =>
                 getAiGateway({ accountId: acct, id: request.id }),
               ),
             );
-          }
+          });
 
           // Sync — the Cloudflare AI Gateway update API is a full PATCH that
-          // overwrites all mutable fields. We always apply the desired shape
-          // so adoption, drift, and routine updates all converge.
+          // overwrites all mutable fields. Always apply the desired shape so
+          // adoption, drift, and routine updates all converge. The create API
+          // doesn't accept dlp/otel/storeId/stripe, so we must update even
+          // immediately after create.
+          //
+          // If the gateway was deleted out-of-band between ensure and update
+          // we'd see `GatewayNotFound` here — recover by re-ensuring and
+          // retrying once. Bounded so a persistent NotFound surfaces.
+          yield* ensure;
           const update = yield* updateRequest(id, news, acct);
-          const gateway = yield* updateAiGateway(update);
+          const gateway = yield* updateAiGateway(update).pipe(
+            Effect.catchTag("GatewayNotFound", () =>
+              Effect.gen(function* () {
+                yield* ensure;
+                return yield* updateAiGateway(update);
+              }),
+            ),
+          );
           return mapGateway(gateway, acct);
         }),
         delete: Effect.fn(function* ({ output }) {
