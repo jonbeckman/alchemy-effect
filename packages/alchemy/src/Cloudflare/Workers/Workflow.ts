@@ -475,6 +475,7 @@ export const WorkflowProvider = () =>
     WorkflowResource,
     Effect.gen(function* () {
       const { accountId } = yield* CloudflareEnvironment;
+      const getWorkflow = yield* workflows.getWorkflow;
       const putWorkflow = yield* workflows.putWorkflow;
       const deleteWorkflow = yield* workflows.deleteWorkflow;
 
@@ -485,10 +486,48 @@ export const WorkflowProvider = () =>
           yield* Effect.logInfo(
             `Cloudflare Workflow reconcile: ${news.workflowName}`,
           );
-          // Cloudflare's `putWorkflow` is a true PUT-as-upsert: identical
-          // payloads converge to the same state and a missing workflow is
-          // created on the spot. There is no separate observe step needed
-          // — the API is naturally reconciler-shaped.
+
+          // Observe live cloud state. `output` is at most a hint —
+          // someone may have deleted the workflow out-of-band, or
+          // adoption may have just handed us a workflow we've never
+          // seen. We only swallow `WorkflowNotFound` (resource really
+          // is missing); auth, throttling, and 5xx errors must surface
+          // so the engine can retry or report cleanly. Treating any
+          // failure as "no workflow live" would silently re-PUT on top
+          // of a transient API blip.
+          const observed = yield* getWorkflow({
+            accountId: acct,
+            workflowName: news.workflowName,
+          }).pipe(
+            Effect.map(
+              (r) => r as workflows.GetWorkflowResponse | undefined,
+            ),
+            Effect.catchTag("WorkflowNotFound", () =>
+              Effect.succeed(undefined),
+            ),
+          );
+
+          // Skip the put when desired state already matches what's
+          // live — saves an API call on idempotent redeploys. A real
+          // change in `className` or `scriptName` falls through to
+          // putWorkflow below.
+          if (
+            observed !== undefined &&
+            observed.className === news.className &&
+            observed.scriptName === news.scriptName
+          ) {
+            return {
+              workflowId: observed.id,
+              workflowName: observed.name,
+              className: observed.className,
+              scriptName: observed.scriptName,
+              accountId: acct,
+            };
+          }
+
+          // `putWorkflow` is a true PUT-as-upsert: identical payloads
+          // converge to the same state and a missing workflow is
+          // created on the spot.
           const result = yield* putWorkflow({
             accountId: acct,
             workflowName: news.workflowName,
