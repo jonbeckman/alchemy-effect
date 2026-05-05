@@ -172,7 +172,11 @@ export const R2BucketProvider = () =>
 
           // Ensure — create if missing. R2 reports a concurrent create
           // (or partial state-persistence failure) as
-          // `BucketAlreadyExists`; tolerate by re-fetching the bucket.
+          // `BucketAlreadyExists`; tolerate by re-fetching the bucket
+          // through the same resolved `jurisdiction` we used for the
+          // initial observe. Using `news.jurisdiction` here (which can
+          // be undefined while the resolved value is "default") would
+          // query a different namespace than the create just hit.
           if (!observed) {
             observed = yield* createBucket({
               accountId: acct,
@@ -185,7 +189,7 @@ export const R2BucketProvider = () =>
                 getBucket({
                   accountId: acct,
                   bucketName: name,
-                  jurisdiction: news.jurisdiction,
+                  jurisdiction,
                 }),
               ),
             );
