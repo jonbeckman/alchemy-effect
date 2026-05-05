@@ -1,5 +1,7 @@
+import { adopt } from "@/AdoptPolicy";
 import * as AWS from "@/AWS";
 import { Vpc } from "@/AWS/EC2";
+import { State } from "@/State";
 import * as Test from "@/Test/Vitest";
 import * as EC2 from "@distilled.cloud/aws/ec2";
 import { expect } from "@effect/vitest";
@@ -73,6 +75,98 @@ test.provider.skip("create, update, delete vpc", (stack) =>
 
     yield* assertVpcDeleted(vpc.vpcId);
   }).pipe(logLevel),
+);
+
+// Engine-level adoption tests for EC2 VPC. Skipped to match the cost
+// profile of the existing `.skip`'d create/update/delete test above —
+// these spin up real VPCs end-to-end.
+test.provider.skip(
+  "owned vpc (matching alchemy tags) is silently adopted without --adopt",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const initial = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Vpc("AdoptableVpc", { cidrBlock: "10.42.0.0/16" });
+        }),
+      );
+      expect(initial.vpcId).toBeDefined();
+
+      // Wipe state — VPC stays in EC2.
+      yield* Effect.gen(function* () {
+        const state = yield* State;
+        yield* state.delete({
+          stack: stack.name,
+          stage: "test",
+          fqn: "AdoptableVpc",
+        });
+      }).pipe(Effect.provide(stack.state));
+
+      const adopted = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Vpc("AdoptableVpc", { cidrBlock: "10.42.0.0/16" });
+        }),
+      );
+
+      expect(adopted.vpcId).toEqual(initial.vpcId);
+      expect(adopted.vpcArn).toEqual(initial.vpcArn);
+
+      yield* stack.destroy();
+      yield* assertVpcDeleted(initial.vpcId);
+    }).pipe(logLevel),
+);
+
+// A foreign-tagged VPC takeover test requires pre-creating a VPC tagged
+// with the new resource's `alchemy::id` (since VPC has no physical name to
+// look up by — `read` filters strictly by alchemy tags). Manually tagging a
+// VPC with our internal tag namespace from a test feels brittle; for now we
+// rely on the SQS coverage of the `Unowned` → adopt(true) → re-tag flow at
+// the engine level, and assert here that adoption-by-tags converges.
+test.provider.skip(
+  "foreign-tagged vpc requires adopt(true) to take over",
+  (stack) =>
+    Effect.gen(function* () {
+      yield* stack.destroy();
+
+      const original = yield* stack.deploy(
+        Effect.gen(function* () {
+          return yield* Vpc("Original", { cidrBlock: "10.43.0.0/16" });
+        }),
+      );
+
+      // Wipe state — VPC stays in EC2 with the "Original" id tag.
+      yield* Effect.gen(function* () {
+        const state = yield* State;
+        yield* state.delete({
+          stack: stack.name,
+          stage: "test",
+          fqn: "Original",
+        });
+      }).pipe(Effect.provide(stack.state));
+
+      const takenOver = yield* stack
+        .deploy(
+          Effect.gen(function* () {
+            return yield* Vpc("Different", { cidrBlock: "10.43.0.0/16" });
+          }),
+        )
+        .pipe(adopt(true));
+
+      const lookup = yield* EC2.describeVpcs({
+        VpcIds: [takenOver.vpcId],
+      });
+      const tags = Object.fromEntries(
+        (lookup.Vpcs?.[0]?.Tags ?? []).map((t) => [t.Key!, t.Value!]),
+      );
+      expect(tags["alchemy::id"]).toEqual("Different");
+
+      yield* stack.destroy();
+      yield* assertVpcDeleted(takenOver.vpcId);
+      if (original.vpcId !== takenOver.vpcId) {
+        yield* assertVpcDeleted(original.vpcId);
+      }
+    }).pipe(logLevel),
 );
 
 const expectVpcAttribute = Effect.fn(function* (props: {

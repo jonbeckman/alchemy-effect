@@ -9,7 +9,14 @@ import { isResolved, somePropsAreDifferent } from "../../Diff.ts";
 import * as Provider from "../../Provider.ts";
 import { Resource } from "../../Resource.ts";
 import type { Providers } from "../Providers.ts";
-import { createInternalTags, createTagsList, diffTags } from "../../Tags.ts";
+import { Unowned } from "../../AdoptPolicy.ts";
+import {
+  createAlchemyTagFilters,
+  createInternalTags,
+  createTagsList,
+  diffTags,
+  hasAlchemyTags,
+} from "../../Tags.ts";
 import type { AccountID } from "../Environment.ts";
 import { AWSEnvironment } from "../Environment.ts";
 import type { RegionID } from "../Region.ts";
@@ -185,6 +192,72 @@ export const VpcProvider = () =>
 
       return {
         stables: ["vpcId", "vpcArn", "ownerId", "isDefault"],
+        // Observe a VPC by alchemy tags. VPC ids are auto-assigned, so we
+        // can't reconstruct the identifier from props — instead we filter
+        // `describeVpcs` by the internal tags `createInternalTags(id)` writes
+        // on every VPC we manage. If a VPC was created out-of-band (no
+        // alchemy tags) the filter returns nothing and we surface
+        // `undefined` rather than guessing.
+        read: Effect.fn(function* ({ id, output }) {
+          let vpc: EC2.Vpc | undefined;
+          if (output?.vpcId) {
+            const lookup = yield* ec2
+              .describeVpcs({ VpcIds: [output.vpcId] })
+              .pipe(
+                Effect.catchTag("InvalidVpcID.NotFound", () =>
+                  Effect.succeed({ Vpcs: [] }),
+                ),
+              );
+            vpc = lookup.Vpcs?.[0];
+          }
+          if (!vpc) {
+            const filters = yield* createAlchemyTagFilters(id);
+            const lookup = yield* ec2.describeVpcs({ Filters: filters });
+            vpc = lookup.Vpcs?.[0];
+          }
+          if (!vpc) return undefined;
+          const vpcId = vpc.VpcId! as VpcId;
+
+          const tags = Object.fromEntries(
+            (vpc.Tags ?? []).map((tag: EC2.Tag) => [tag.Key!, tag.Value!]),
+          ) as Record<string, string>;
+
+          const attrs = {
+            vpcId,
+            vpcArn:
+              `arn:aws:ec2:${region}:${accountId}:vpc/${vpcId}` as VpcArn,
+            cidrBlock: vpc.CidrBlock!,
+            dhcpOptionsId: vpc.DhcpOptionsId!,
+            state: vpc.State!,
+            isDefault: vpc.IsDefault ?? false,
+            ownerId: vpc.OwnerId,
+            cidrBlockAssociationSet: vpc.CidrBlockAssociationSet?.map(
+              (assoc) => ({
+                associationId: assoc.AssociationId!,
+                cidrBlock: assoc.CidrBlock!,
+                cidrBlockState: {
+                  state: assoc.CidrBlockState!.State!,
+                  statusMessage: assoc.CidrBlockState!.StatusMessage,
+                },
+              }),
+            ),
+            ipv6CidrBlockAssociationSet: vpc.Ipv6CidrBlockAssociationSet?.map(
+              (assoc) => ({
+                associationId: assoc.AssociationId!,
+                ipv6CidrBlock: assoc.Ipv6CidrBlock!,
+                ipv6CidrBlockState: {
+                  state: assoc.Ipv6CidrBlockState!.State!,
+                  statusMessage: assoc.Ipv6CidrBlockState!.StatusMessage,
+                },
+                networkBorderGroup: assoc.NetworkBorderGroup,
+                ipv6Pool: assoc.Ipv6Pool,
+              }),
+            ),
+            tags,
+          };
+
+          return (yield* hasAlchemyTags(id, tags)) ? attrs : Unowned(attrs);
+        }),
         diff: Effect.fn(function* ({ news, olds }) {
           if (!isResolved(news)) return;
           if (
