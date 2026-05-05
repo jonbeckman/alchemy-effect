@@ -1,9 +1,37 @@
 import * as Axiom from "@distilled.cloud/axiom";
 import * as Effect from "effect/Effect";
+import { Unowned } from "../AdoptPolicy.ts";
 import { isResolved } from "../Diff.ts";
 import * as Provider from "../Provider.ts";
 import { Resource } from "../Resource.ts";
+import { Stack } from "../Stack.ts";
+import { Stage } from "../Stage.ts";
 import type { Providers } from "./Providers.ts";
+
+const MARKER_RE = /\s*\[alchemy:stack=([^;]+);stage=([^;]+);id=([^\]]+)\]\s*$/;
+
+const buildMarker = (stack: string, stage: string, id: string) =>
+  `[alchemy:stack=${stack};stage=${stage};id=${id}]`;
+
+const stripMarker = (description: string | undefined) =>
+  (description ?? "").replace(MARKER_RE, "").trimEnd();
+
+const augmentDescription = (
+  description: string | undefined,
+  marker: string,
+) => {
+  const base = stripMarker(description);
+  return base.length > 0 ? `${base}\n${marker}` : marker;
+};
+
+const parseMarker = (
+  description: string | undefined,
+): { stack: string; stage: string; id: string } | undefined => {
+  if (!description) return undefined;
+  const m = description.match(MARKER_RE);
+  if (!m) return undefined;
+  return { stack: m[1], stage: m[2], id: m[3] };
+};
 
 export type ViewProps = Axiom.CreateViewInput;
 
@@ -81,7 +109,16 @@ export const ViewProvider = () =>
           }
           return undefined;
         }),
-        reconcile: Effect.fn(function* ({ news, output }) {
+        reconcile: Effect.fn(function* ({ id, news, output }) {
+          const stack = yield* Stack;
+          const stage = yield* Stage;
+          const marker = buildMarker(stack.name, stage, id);
+          const desiredDescription = augmentDescription(
+            news.description,
+            marker,
+          );
+          const desired = { ...news, description: desiredDescription };
+
           // Observe — `name` is the path identifier for views. Renames are
           // forced to a replacement by `diff` above, so the cached
           // `output.id` (set to `news.name` on first create) and the
@@ -91,15 +128,53 @@ export const ViewProvider = () =>
             Effect.catchTag("NotFound", () => Effect.succeed(undefined)),
           );
 
-          // Ensure — POST creates the view under `news.name`.
+          // Ensure — POST creates the view under `news.name`. Axiom's
+          // `createView` declares `UnprocessableEntity` for name reuse;
+          // 409s fall through `HTTP_STATUS_MAP` to `Conflict` (typed) or
+          // `UnknownAxiomError` (fallback). On any of those, re-observe
+          // and either update if we own it or surface the foreign-owner
+          // error so the engine's adoption gate fires.
           if (observed === undefined) {
-            const result = yield* create(news);
+            const result = yield* create(desired).pipe(
+              Effect.catch((e: { readonly _tag?: string }) => {
+                const tag = e._tag;
+                if (
+                  tag === "UnprocessableEntity" ||
+                  tag === "Conflict" ||
+                  tag === "UnknownAxiomError"
+                ) {
+                  return Effect.gen(function* () {
+                    const existing = yield* get({ id: news.name }).pipe(
+                      Effect.catchTag("NotFound", () =>
+                        Effect.succeed(undefined),
+                      ),
+                    );
+                    if (existing === undefined) {
+                      return yield* Effect.fail(e);
+                    }
+                    const ownership = parseMarker(existing.description);
+                    const isOurs =
+                      ownership === undefined ||
+                      (ownership.stack === stack.name &&
+                        ownership.stage === stage &&
+                        ownership.id === id);
+                    if (!isOurs) {
+                      return yield* Effect.fail(e);
+                    }
+                    return yield* update({ ...desired, id: news.name });
+                  });
+                }
+                return Effect.fail(e);
+              }),
+            );
             return { ...result, id: news.name };
           }
 
           // Sync — the view exists; PUT against its id with the desired
-          // props.
-          const result = yield* update({ ...news, id: viewId });
+          // props. If the view disappeared mid-reconcile, recreate.
+          const result = yield* update({ ...desired, id: viewId }).pipe(
+            Effect.catchTag("NotFound", () => create(desired)),
+          );
           return { ...result, id: viewId };
         }),
         delete: Effect.fn(function* ({ output }) {
@@ -107,12 +182,22 @@ export const ViewProvider = () =>
             Effect.catchTag("NotFound", () => Effect.void),
           );
         }),
-        read: Effect.fn(function* ({ output }) {
+        read: Effect.fn(function* ({ id, output }) {
           if (!output?.id) return undefined;
-          return yield* get({ id: output.id }).pipe(
-            Effect.map((current) => ({ ...current, id: output.id })),
+          const stack = yield* Stack;
+          const stage = yield* Stage;
+          const existing = yield* get({ id: output.id }).pipe(
             Effect.catchTag("NotFound", () => Effect.succeed(undefined)),
           );
+          if (!existing) return undefined;
+          const ownership = parseMarker(existing.description);
+          const isOurs =
+            ownership !== undefined &&
+            ownership.stack === stack.name &&
+            ownership.stage === stage &&
+            ownership.id === id;
+          const attrs = { ...existing, id: output.id };
+          return isOurs ? attrs : Unowned(attrs);
         }),
       };
     }),

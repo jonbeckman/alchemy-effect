@@ -108,7 +108,7 @@ export const ApiTokenProvider = () =>
           // once; capture it into Redacted state for downstream consumers.
           const result = yield* create(news);
           if (!result.token) {
-            return yield* Effect.die(
+            return yield* Effect.fail(
               new Error("Axiom did not return a token on create"),
             );
           }

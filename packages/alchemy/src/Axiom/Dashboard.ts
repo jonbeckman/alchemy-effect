@@ -1,7 +1,10 @@
 import * as Axiom from "@distilled.cloud/axiom";
 import * as Effect from "effect/Effect";
+import { Unowned } from "../AdoptPolicy.ts";
 import * as Provider from "../Provider.ts";
 import { Resource } from "../Resource.ts";
+import { Stack } from "../Stack.ts";
+import { Stage } from "../Stage.ts";
 import type { Chart, LayoutCell } from "./Chart.ts";
 import type { Providers } from "./Providers.ts";
 
@@ -131,6 +134,38 @@ export type Dashboard = Resource<
  */
 export const Dashboard = Resource<Dashboard>("Axiom.Dashboard");
 
+/**
+ * Axiom dashboards have no tags/labels API. The only writable field we can
+ * use to mark ownership is `description`. We append a deterministic marker
+ * so that on a re-apply (e.g. state was wiped) we can identify a dashboard
+ * we previously created and adopt it idempotently — without hijacking a
+ * dashboard created by someone else with the same uid.
+ */
+const MARKER_RE = /\s*\[alchemy:stack=([^;]+);stage=([^;]+);id=([^\]]+)\]\s*$/;
+
+const buildMarker = (stack: string, stage: string, id: string) =>
+  `[alchemy:stack=${stack};stage=${stage};id=${id}]`;
+
+const stripMarker = (description: string | undefined) =>
+  (description ?? "").replace(MARKER_RE, "").trimEnd();
+
+const augmentDescription = (
+  description: string | undefined,
+  marker: string,
+) => {
+  const base = stripMarker(description);
+  return base.length > 0 ? `${base}\n${marker}` : marker;
+};
+
+const parseMarker = (
+  description: string | undefined,
+): { stack: string; stage: string; id: string } | undefined => {
+  if (!description) return undefined;
+  const m = description.match(MARKER_RE);
+  if (!m) return undefined;
+  return { stack: m[1], stage: m[2], id: m[3] };
+};
+
 export const DashboardProvider = () =>
   Provider.effect(
     Dashboard,
@@ -159,9 +194,28 @@ export const DashboardProvider = () =>
         dashboard: current.dashboard,
       });
 
+      const augmentInput = (
+        input: Axiom.CreateDashboardInput,
+        marker: string,
+      ): Axiom.CreateDashboardInput => ({
+        ...input,
+        dashboard: {
+          ...input.dashboard,
+          description: augmentDescription(
+            input.dashboard.description,
+            marker,
+          ),
+        },
+      });
+
       return {
         stables: ["uid", "id", "createdAt", "createdBy"],
-        reconcile: Effect.fn(function* ({ news, output }) {
+        reconcile: Effect.fn(function* ({ id, news, output }) {
+          const stack = yield* Stack;
+          const stage = yield* Stage;
+          const marker = buildMarker(stack.name, stage, id);
+          const desired = augmentInput(news, marker);
+
           // Observe — `uid` is server-assigned at create time. We probe
           // Axiom for the dashboard via the cached uid; treat NotFound
           // (deleted out-of-band) as "no observed state" so we converge
@@ -174,14 +228,27 @@ export const DashboardProvider = () =>
 
           // Ensure — POST mints a new dashboard with a fresh uid.
           if (observed === undefined) {
-            return toAttrsFromCreate(yield* create(news));
+            return toAttrsFromCreate(yield* create(desired));
           }
 
           // Sync — `overwrite: true` short-circuits Axiom's optimistic-
           // concurrency check (otherwise the API requires the caller to
           // echo back the server-side `version`, which we don't track).
+          // If the dashboard disappeared between observe and update
+          // (deleted out-of-band mid-reconcile), the SDK routes a 404 to
+          // `NotFound` via `HTTP_STATUS_MAP`; `updateDashboard` does not
+          // declare it so we narrow on `_tag` and recover by re-creating.
           return toAttrsFromCreate(
-            yield* update({ ...news, uid: observed.uid, overwrite: true }),
+            yield* update({
+              ...desired,
+              uid: observed.uid,
+              overwrite: true,
+            }).pipe(
+              Effect.catch((e: { readonly _tag?: string }) => {
+                if (e._tag === "NotFound") return create(desired);
+                return Effect.fail(e);
+              }),
+            ),
           );
         }),
         delete: Effect.fn(function* ({ output }) {
@@ -189,12 +256,22 @@ export const DashboardProvider = () =>
             Effect.catchTag("NotFound", () => Effect.void),
           );
         }),
-        read: Effect.fn(function* ({ output }) {
+        read: Effect.fn(function* ({ id, output }) {
           if (!output?.uid) return undefined;
-          return yield* get({ uid: output.uid }).pipe(
-            Effect.map(toAttrsFromGet),
+          const stack = yield* Stack;
+          const stage = yield* Stage;
+          const existing = yield* get({ uid: output.uid }).pipe(
             Effect.catchTag("NotFound", () => Effect.succeed(undefined)),
           );
+          if (!existing) return undefined;
+          const ownership = parseMarker(existing.dashboard.description);
+          const isOurs =
+            ownership !== undefined &&
+            ownership.stack === stack.name &&
+            ownership.stage === stage &&
+            ownership.id === id;
+          const attrs = toAttrsFromGet(existing);
+          return isOurs ? attrs : Unowned(attrs);
         }),
       };
     }),

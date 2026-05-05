@@ -1,9 +1,37 @@
 import * as Axiom from "@distilled.cloud/axiom";
 import * as Effect from "effect/Effect";
+import { Unowned } from "../AdoptPolicy.ts";
 import { isResolved } from "../Diff.ts";
 import * as Provider from "../Provider.ts";
 import { Resource } from "../Resource.ts";
+import { Stack } from "../Stack.ts";
+import { Stage } from "../Stage.ts";
 import type { Providers } from "./Providers.ts";
+
+const MARKER_RE = /\s*\[alchemy:stack=([^;]+);stage=([^;]+);id=([^\]]+)\]\s*$/;
+
+const buildMarker = (stack: string, stage: string, id: string) =>
+  `[alchemy:stack=${stack};stage=${stage};id=${id}]`;
+
+const stripMarker = (description: string | undefined) =>
+  (description ?? "").replace(MARKER_RE, "").trimEnd();
+
+const augmentDescription = (
+  description: string | undefined,
+  marker: string,
+) => {
+  const base = stripMarker(description);
+  return base.length > 0 ? `${base}\n${marker}` : marker;
+};
+
+const parseMarker = (
+  description: string | undefined,
+): { stack: string; stage: string; id: string } | undefined => {
+  if (!description) return undefined;
+  const m = description.match(MARKER_RE);
+  if (!m) return undefined;
+  return { stack: m[1], stage: m[2], id: m[3] };
+};
 
 export type VirtualFieldProps = Axiom.CreateVirtualFieldInput;
 
@@ -68,7 +96,15 @@ export const VirtualFieldProvider = () =>
           }
           return undefined;
         }),
-        reconcile: Effect.fn(function* ({ news, output }) {
+        reconcile: Effect.fn(function* ({ id, news, output }) {
+          const stack = yield* Stack;
+          const stage = yield* Stage;
+          const marker = buildMarker(stack.name, stage, id);
+          const desired = {
+            ...news,
+            description: augmentDescription(news.description, marker),
+          };
+
           // Observe — Axiom assigns the virtual-field id server-side, so
           // the only handle to a previously-created field is the cached
           // `output.id`. Probe for live state with that id; treat NotFound
@@ -82,23 +118,36 @@ export const VirtualFieldProvider = () =>
 
           // Ensure — POST mints a new virtual field with a fresh id.
           if (observed === undefined) {
-            return yield* create(news);
+            return yield* create(desired);
           }
 
           // Sync — the field exists; PUT against its id with the desired
-          // props. `dataset` is replacement-only (handled in diff).
-          return yield* update({ ...news, id: observed.id });
+          // props. `dataset` is replacement-only (handled in diff). If the
+          // field disappeared between observe and update, recreate.
+          return yield* update({ ...desired, id: observed.id }).pipe(
+            Effect.catchTag("NotFound", () => create(desired)),
+          );
         }),
         delete: Effect.fn(function* ({ output }) {
           yield* del({ id: output.id }).pipe(
             Effect.catchTag("NotFound", () => Effect.void),
           );
         }),
-        read: Effect.fn(function* ({ output }) {
+        read: Effect.fn(function* ({ id, output }) {
           if (!output?.id) return undefined;
-          return yield* get({ id: output.id }).pipe(
+          const stack = yield* Stack;
+          const stage = yield* Stage;
+          const existing = yield* get({ id: output.id }).pipe(
             Effect.catchTag("NotFound", () => Effect.succeed(undefined)),
           );
+          if (!existing) return undefined;
+          const ownership = parseMarker(existing.description);
+          const isOurs =
+            ownership !== undefined &&
+            ownership.stack === stack.name &&
+            ownership.stage === stage &&
+            ownership.id === id;
+          return isOurs ? existing : Unowned(existing);
         }),
       };
     }),

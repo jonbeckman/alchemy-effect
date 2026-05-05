@@ -1,8 +1,36 @@
 import * as Axiom from "@distilled.cloud/axiom";
 import * as Effect from "effect/Effect";
+import { Unowned } from "../AdoptPolicy.ts";
 import * as Provider from "../Provider.ts";
 import { Resource } from "../Resource.ts";
+import { Stack } from "../Stack.ts";
+import { Stage } from "../Stage.ts";
 import type { Providers } from "./Providers.ts";
+
+const MARKER_RE = /\s*\[alchemy:stack=([^;]+);stage=([^;]+);id=([^\]]+)\]\s*$/;
+
+const buildMarker = (stack: string, stage: string, id: string) =>
+  `[alchemy:stack=${stack};stage=${stage};id=${id}]`;
+
+const stripMarker = (description: string | undefined) =>
+  (description ?? "").replace(MARKER_RE, "").trimEnd();
+
+const augmentDescription = (
+  description: string | undefined,
+  marker: string,
+) => {
+  const base = stripMarker(description);
+  return base.length > 0 ? `${base}\n${marker}` : marker;
+};
+
+const parseMarker = (
+  description: string | undefined,
+): { stack: string; stage: string; id: string } | undefined => {
+  if (!description) return undefined;
+  const m = description.match(MARKER_RE);
+  if (!m) return undefined;
+  return { stack: m[1], stage: m[2], id: m[3] };
+};
 
 export type AnnotationProps = Axiom.CreateAnnotationInput;
 
@@ -67,7 +95,15 @@ export const AnnotationProvider = () =>
 
       return {
         stables: ["id"],
-        reconcile: Effect.fn(function* ({ news, output }) {
+        reconcile: Effect.fn(function* ({ id, news, output }) {
+          const stack = yield* Stack;
+          const stage = yield* Stage;
+          const marker = buildMarker(stack.name, stage, id);
+          const desired = {
+            ...news,
+            description: augmentDescription(news.description, marker),
+          };
+
           // Observe — Axiom assigns the annotation id server-side, so the
           // only handle to a previously-created annotation is the cached
           // `output.id`. Probe for live state with that id; treat NotFound
@@ -81,15 +117,18 @@ export const AnnotationProvider = () =>
           // Ensure — when no observed annotation exists, POST creates one
           // and Axiom assigns the id.
           if (observed === undefined) {
-            return yield* create(news);
+            return yield* create(desired);
           }
 
           // Sync — the annotation exists; apply desired props with PUT and
-          // preserve the stable id and original time as fallbacks.
-          const result = yield* update({ ...news, id: observed.id! });
+          // preserve the stable id and original time as fallbacks. If it
+          // disappeared between observe and update, recreate.
+          const result = yield* update({ ...desired, id: observed.id! }).pipe(
+            Effect.catchTag("NotFound", () => create(desired)),
+          );
           return {
             ...result,
-            id: observed.id!,
+            id: result.id ?? observed.id!,
             time: result.time ?? output?.time ?? news.time,
           };
         }),
@@ -98,16 +137,26 @@ export const AnnotationProvider = () =>
             Effect.catchTag("NotFound", () => Effect.void),
           );
         }),
-        read: Effect.fn(function* ({ output }) {
+        read: Effect.fn(function* ({ id, output }) {
           if (!output?.id) return undefined;
-          return yield* get({ id: output.id }).pipe(
-            Effect.map((current) => ({
-              ...current,
-              id: current.id ?? output.id,
-              time: current.time ?? output.time,
-            })),
+          const stack = yield* Stack;
+          const stage = yield* Stage;
+          const existing = yield* get({ id: output.id }).pipe(
             Effect.catchTag("NotFound", () => Effect.succeed(undefined)),
           );
+          if (!existing) return undefined;
+          const ownership = parseMarker(existing.description);
+          const isOurs =
+            ownership !== undefined &&
+            ownership.stack === stack.name &&
+            ownership.stage === stage &&
+            ownership.id === id;
+          const attrs = {
+            ...existing,
+            id: existing.id ?? output.id,
+            time: existing.time ?? output.time,
+          };
+          return isOurs ? attrs : Unowned(attrs);
         }),
       };
     }),
