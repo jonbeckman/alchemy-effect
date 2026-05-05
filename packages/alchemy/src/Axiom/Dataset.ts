@@ -210,67 +210,119 @@ export const DatasetProvider = () =>
           // also stable input. Probe for live state by name (preferring the
           // cached `output.id` when present). `read` upstream has already
           // surfaced foreign datasets as `Unowned`, so by the time we land
-          // here mutation is safe.
+          // here mutation is safe — but we still re-confirm ownership on
+          // the conflict path below to avoid hijacking on a state-loss
+          // race where `read` returned `undefined` (transient NotFound or
+          // an out-of-band recreate by a foreign owner).
           const datasetId = output?.id ?? news.name;
           const observed = yield* get({ dataset_id: datasetId }).pipe(
             Effect.catchTag("NotFound", () => Effect.succeed(undefined)),
           );
 
-          // Ensure — POST creates the dataset. Tolerate Conflict/
-          // UnprocessableEntity as a race with a peer reconciler (or with
-          // upstream read↔create), falling through to the sync path.
-          let current = observed;
-          if (current === undefined) {
-            current = yield* (
-              create({
-                name: news.name,
-                description: augmentDescription(news.description, marker),
-                kind: news.kind,
-                retentionDays: news.retentionDays,
-                useRetentionPeriod: news.useRetentionPeriod,
-              }) as Effect.Effect<
-                Axiom.CreateDatasetOutput,
-                { readonly _tag: string },
-                never
-              >
-            ).pipe(
-              Effect.catchIf(
-                (
-                  e,
-                ): e is { readonly _tag: "Conflict" | "UnprocessableEntity" } =>
-                  e._tag === "Conflict" || e._tag === "UnprocessableEntity",
-                () =>
-                  update({
-                    dataset_id: news.name,
-                    description: augmentDescription(news.description, marker),
-                    retentionDays: news.retentionDays,
-                    useRetentionPeriod: news.useRetentionPeriod,
-                  }),
-              ),
-            );
-            return toAttrs(current);
-          }
-
-          // Sync — the dataset exists. Apply mutable aspects (description,
-          // retentionDays, useRetentionPeriod) via PATCH. `kind` and `name`
-          // are stable and replacement-only via diff above.
           const desiredDescription = augmentDescription(
             news.description,
             marker,
           );
+
+          // Ensure — POST creates the dataset. Axiom's `createDataset`
+          // declares `BadRequest | Forbidden | UnprocessableEntity`, but
+          // the underlying client routes HTTP 409 to a typed `Conflict`
+          // (via HTTP_STATUS_MAP) and falls back to `UnknownAxiomError`
+          // for unmapped statuses. All three are name-collision shapes we
+          // can recover from by re-observing and either updating (if we
+          // own it) or surfacing the foreign-owner error so the engine's
+          // adoption gate fires.
+          if (observed === undefined) {
+            const created = yield* create({
+              name: news.name,
+              description: desiredDescription,
+              kind: news.kind,
+              retentionDays: news.retentionDays,
+              useRetentionPeriod: news.useRetentionPeriod,
+            }).pipe(
+              // `Effect.catch` widens the error channel to any cause; the
+              // inner branch narrows on `_tag` against the known collision
+              // shapes and rethrows everything else. This replaces the
+              // previous unsafe cast that hid real types.
+              Effect.catch((e: { readonly _tag?: string }) => {
+                const tag = e._tag;
+                if (
+                  tag === "UnprocessableEntity" ||
+                  tag === "Conflict" ||
+                  tag === "UnknownAxiomError"
+                ) {
+                  return Effect.gen(function* () {
+                    // Re-observe to confirm a) the dataset really is
+                    // present (i.e. the conflict came from name reuse,
+                    // not some other 422) and b) we still own it. If
+                    // ownership has flipped to a foreign owner since
+                    // engine-level read, refuse to clobber.
+                    const existing = yield* get({
+                      dataset_id: news.name,
+                    }).pipe(
+                      Effect.catchTag("NotFound", () =>
+                        Effect.succeed(undefined),
+                      ),
+                    );
+                    if (existing === undefined) {
+                      // The collision is gone — bubble the original
+                      // create error so the engine retries / fails loudly
+                      // instead of silently masking a transient.
+                      return yield* Effect.fail(e);
+                    }
+                    const ownership = parseMarker(existing.description);
+                    const isOurs =
+                      ownership === undefined ||
+                      (ownership.stack === stack.name &&
+                        ownership.stage === stage &&
+                        ownership.id === id);
+                    if (!isOurs) {
+                      return yield* Effect.fail(e);
+                    }
+                    return yield* update({
+                      dataset_id: existing.id,
+                      description: desiredDescription,
+                      retentionDays: news.retentionDays,
+                      useRetentionPeriod: news.useRetentionPeriod,
+                    });
+                  });
+                }
+                return Effect.fail(e);
+              }),
+            );
+            return toAttrs(created);
+          }
+
+          // Sync — the dataset exists. Apply mutable aspects
+          // (`description`, `retentionDays`, `useRetentionPeriod`) via
+          // PUT. `kind` and `name` are stable and replacement-only via
+          // diff above. Diff against OBSERVED state, not `output` /
+          // `olds`, so out-of-band drift converges on re-deploy.
           const needsSync =
-            current.description !== desiredDescription ||
-            current.retentionDays !== news.retentionDays ||
-            current.useRetentionPeriod !== news.useRetentionPeriod;
+            observed.description !== desiredDescription ||
+            observed.retentionDays !== news.retentionDays ||
+            observed.useRetentionPeriod !== news.useRetentionPeriod;
           if (!needsSync) {
-            return toAttrs(current);
+            return toAttrs(observed);
           }
           const updated = yield* update({
-            dataset_id: current.id,
+            dataset_id: observed.id,
             description: desiredDescription,
             retentionDays: news.retentionDays,
             useRetentionPeriod: news.useRetentionPeriod,
-          });
+          }).pipe(
+            // If the dataset disappeared between observe and update
+            // (deleted out-of-band mid-reconcile), recover by recreating.
+            Effect.catchTag("NotFound", () =>
+              create({
+                name: news.name,
+                description: desiredDescription,
+                kind: news.kind,
+                retentionDays: news.retentionDays,
+                useRetentionPeriod: news.useRetentionPeriod,
+              }),
+            ),
+          );
           return toAttrs(updated);
         }),
         delete: Effect.fn(function* ({ output }) {
