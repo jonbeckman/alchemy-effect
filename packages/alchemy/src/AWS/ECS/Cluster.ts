@@ -1,12 +1,14 @@
 import * as ecs from "@distilled.cloud/aws/ecs";
 import { Region } from "@distilled.cloud/aws/Region";
 import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
+import { Unowned } from "../../AdoptPolicy.ts";
 import { isResolved } from "../../Diff.ts";
 import { createPhysicalName } from "../../PhysicalName.ts";
 import * as Provider from "../../Provider.ts";
 import { Resource } from "../../Resource.ts";
 import type { Providers } from "../Providers.ts";
-import { createInternalTags, diffTags } from "../../Tags.ts";
+import { createInternalTags, diffTags, hasAlchemyTags } from "../../Tags.ts";
 import { AWSEnvironment, type AccountID } from "../Environment.ts";
 import type { RegionID } from "../Region.ts";
 
@@ -95,6 +97,22 @@ export const ClusterProvider = () =>
           ? Effect.succeed(props.clusterName)
           : createPhysicalName({ id, maxLength: 255, lowercase: true });
 
+      // `UpdateInProgressException` is raised when ECS is still applying a
+      // prior cluster mutation. It is transient — back off and retry on a
+      // bounded schedule so we don't loop forever if the cluster is wedged.
+      const retryOnUpdateInProgress = <A, E, R>(
+        effect: Effect.Effect<A, E, R>,
+      ) =>
+        effect.pipe(
+          Effect.retry({
+            while: (e) =>
+              (e as { _tag?: string })._tag === "UpdateInProgressException",
+            schedule: Schedule.fixed("2 seconds").pipe(
+              Schedule.both(Schedule.recurs(30)),
+            ),
+          }),
+        );
+
       const applyCapacityProviders = Effect.fn(function* ({
         cluster,
         capacityProviders,
@@ -108,12 +126,14 @@ export const ClusterProvider = () =>
           capacityProviders !== undefined ||
           defaultCapacityProviderStrategy !== undefined
         ) {
-          yield* ecs.putClusterCapacityProviders({
-            cluster,
-            capacityProviders: capacityProviders ?? [],
-            defaultCapacityProviderStrategy:
-              defaultCapacityProviderStrategy ?? [],
-          });
+          yield* retryOnUpdateInProgress(
+            ecs.putClusterCapacityProviders({
+              cluster,
+              capacityProviders: capacityProviders ?? [],
+              defaultCapacityProviderStrategy:
+                defaultCapacityProviderStrategy ?? [],
+            }),
+          );
         }
       });
 
@@ -135,11 +155,27 @@ export const ClusterProvider = () =>
             clusters: [output?.clusterArn ?? clusterName],
             include: ["SETTINGS", "TAGS", "CONFIGURATIONS"],
           });
-          const cluster = described.clusters?.[0];
+          // ECS keeps INACTIVE clusters in describeClusters for ~1h after
+          // delete; treat them as gone so the reconciler recreates rather
+          // than trying to update a tombstone.
+          const cluster = described.clusters?.find(
+            (c) =>
+              c.clusterName === clusterName &&
+              c.status !== "INACTIVE" &&
+              c.status !== "DEPROVISIONING",
+          );
           if (!cluster?.clusterArn) {
             return undefined;
           }
-          return {
+          const observedTags = Object.fromEntries(
+            (cluster.tags ?? [])
+              .filter(
+                (t): t is { key: string; value: string } =>
+                  typeof t.key === "string" && typeof t.value === "string",
+              )
+              .map((t) => [t.key, t.value]),
+          );
+          const attrs = {
             clusterArn: cluster.clusterArn as ClusterArn,
             clusterName: cluster.clusterName!,
             status: cluster.status ?? "ACTIVE",
@@ -151,8 +187,13 @@ export const ClusterProvider = () =>
             serviceConnectDefaults: cluster.serviceConnectDefaults?.namespace
               ? { namespace: cluster.serviceConnectDefaults.namespace }
               : undefined,
-            tags: output?.tags ?? {},
+            tags: observedTags,
           };
+          // Foreign clusters (no alchemy tags) require `--adopt` / `adopt(true)`
+          // before the engine will take them over.
+          return (yield* hasAlchemyTags(id, observedTags))
+            ? attrs
+            : Unowned(attrs);
         }),
         reconcile: Effect.fn(function* ({ id, news, session }) {
           const clusterName = yield* toClusterName(id, news);
@@ -161,39 +202,55 @@ export const ClusterProvider = () =>
           const internalTags = yield* createInternalTags(id);
           const desiredTags = { ...internalTags, ...news.tags };
 
-          // Observe — fetch live cloud state.
-          let described = yield* ecs.describeClusters({
-            clusters: [clusterArn],
-            include: ["SETTINGS", "TAGS", "CONFIGURATIONS"],
-          });
-          let cluster = described.clusters?.find(
-            (c) =>
-              c.clusterName === clusterName &&
-              (c.status === "ACTIVE" || c.status === "PROVISIONING"),
-          );
+          // Observe — fetch live cloud state. INACTIVE / DEPROVISIONING
+          // clusters linger for ~1h after delete; treat them as gone so we
+          // recreate rather than trying to update a tombstone.
+          const observe = ecs
+            .describeClusters({
+              clusters: [clusterArn],
+              include: ["SETTINGS", "TAGS", "CONFIGURATIONS"],
+            })
+            .pipe(
+              Effect.map(
+                (r) =>
+                  r.clusters?.find(
+                    (c) =>
+                      c.clusterName === clusterName &&
+                      c.status !== "INACTIVE" &&
+                      c.status !== "DEPROVISIONING",
+                  ),
+              ),
+            );
+          let cluster = yield* observe;
 
-          // Ensure — create if missing. ECS createCluster is idempotent for
-          // identical params and returns the existing cluster on conflict;
-          // we always sync below regardless.
+          // Ensure — create if missing. `createCluster` does not raise on a
+          // pre-existing cluster of the same name; it returns the existing
+          // resource. We always sync below regardless.
           if (!cluster?.clusterArn) {
-            const created = yield* ecs.createCluster({
+            yield* ecs.createCluster({
               clusterName,
               settings: news.settings,
               configuration: news.configuration,
               serviceConnectDefaults: news.serviceConnectDefaults,
               tags: toEcsTags(desiredTags),
             });
-            cluster = created.cluster;
+            // Re-read so the tag-diff baseline reflects what's actually on
+            // the cluster (createCluster's response doesn't echo tags).
+            cluster = yield* observe;
           }
 
           // Sync cluster config — call updateCluster to converge settings,
           // configuration, and serviceConnectDefaults to desired state.
-          yield* ecs.updateCluster({
-            cluster: clusterArn,
-            settings: news.settings,
-            configuration: news.configuration,
-            serviceConnectDefaults: news.serviceConnectDefaults,
-          });
+          // ECS may surface `UpdateInProgressException` if a previous update
+          // hasn't fully propagated; back off and retry.
+          yield* retryOnUpdateInProgress(
+            ecs.updateCluster({
+              cluster: clusterArn,
+              settings: news.settings,
+              configuration: news.configuration,
+              serviceConnectDefaults: news.serviceConnectDefaults,
+            }),
+          );
 
           // Sync capacity providers — observed ↔ desired.
           yield* applyCapacityProviders({
@@ -241,21 +298,21 @@ export const ClusterProvider = () =>
           };
         }),
         delete: Effect.fn(function* ({ output }) {
-          yield* ecs
-            .deleteCluster({
+          // ECS rejects delete while a prior mutation is in flight; retry
+          // briefly. `ClusterContainsServicesException` /
+          // `ClusterContainsTasksException` /
+          // `ClusterContainsContainerInstancesException` /
+          // `ClusterContainsCapacityProviderException` mean the cluster
+          // still has dependents — surface those so the engine reports a
+          // dependency violation rather than pretending we deleted.
+          // `ClusterNotFoundException` is success (already gone).
+          yield* retryOnUpdateInProgress(
+            ecs.deleteCluster({
               cluster: output.clusterArn,
-            })
-            .pipe(
-              Effect.catchTag("ClusterNotFoundException", () => Effect.void),
-              Effect.catchTag(
-                "ClusterContainsServicesException",
-                () => Effect.void,
-              ),
-              Effect.catchTag(
-                "ClusterContainsTasksException",
-                () => Effect.void,
-              ),
-            );
+            }),
+          ).pipe(
+            Effect.catchTag("ClusterNotFoundException", () => Effect.void),
+          );
         }),
       };
     }),

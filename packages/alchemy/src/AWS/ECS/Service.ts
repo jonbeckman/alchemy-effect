@@ -608,11 +608,14 @@ export const ServiceProvider = () =>
               );
           }
           if (output.targetGroupArn) {
-            yield* elbv2
-              .deleteTargetGroup({
-                TargetGroupArn: output.targetGroupArn,
-              })
-              .pipe(Effect.catch(() => Effect.void));
+            // `deleteTargetGroup` is idempotent for a missing TG and surfaces
+            // `ResourceInUseException` if it's still attached to a listener.
+            // We delete the listener above, so `ResourceInUseException` here
+            // would be a real ordering bug — let it surface instead of
+            // swallowing it with a blanket catch.
+            yield* elbv2.deleteTargetGroup({
+              TargetGroupArn: output.targetGroupArn,
+            });
           }
           if (output.loadBalancerArn) {
             yield* elbv2
