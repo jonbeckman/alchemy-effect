@@ -1,4 +1,6 @@
 import * as queues from "@distilled.cloud/cloudflare/queues";
+import { UnknownCloudflareError } from "@distilled.cloud/cloudflare/Errors";
+import { BadRequest } from "@distilled.cloud/core/errors";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -10,23 +12,27 @@ import { CloudflareEnvironment } from "../CloudflareEnvironment.ts";
 import type { Providers } from "../Providers.ts";
 
 /**
- * Cloudflare returns this code when the target worker exists but its
- * deployed script doesn't export a `queue` handler. The reconciler
- * almost always hits this transiently when a sibling Worker
- * resource's pre-create stub is live (no queue handler) and the real
- * reconcile hasn't replaced it yet — so we retry with backoff. If
- * the user genuinely forgot to export a queue handler we eventually
- * surface the failure after `recurs` is exhausted.
+ * Cloudflare reports a missing `queue` handler in two ways depending on
+ * which API surface flags it: an envelope-tagged `UnknownCloudflareError`
+ * with `code: 11001`, or a plain HTTP 400 (`BadRequest`) whose message
+ * mentions "queue handler is missing". Both happen transiently when a
+ * sibling Worker resource's pre-create stub is live (no queue handler)
+ * and the real reconcile hasn't replaced it yet, so we retry with
+ * backoff. If the user genuinely forgot to export a queue handler we
+ * eventually surface the failure after `recurs` is exhausted.
  */
 const QUEUE_HANDLER_MISSING_CODE = 11001;
+const QUEUE_HANDLER_MISSING_MESSAGE = /queue handler is missing/i;
 
-const isQueueHandlerMissing = (e: unknown): boolean =>
-  typeof e === "object" &&
-  e !== null &&
-  "_tag" in e &&
-  (e as { _tag: unknown })._tag === "UnknownCloudflareError" &&
-  "code" in e &&
-  (e as { code?: unknown }).code === QUEUE_HANDLER_MISSING_CODE;
+const isQueueHandlerMissing = (e: unknown): boolean => {
+  if (e instanceof UnknownCloudflareError) {
+    return e.code === QUEUE_HANDLER_MISSING_CODE;
+  }
+  if (e instanceof BadRequest) {
+    return QUEUE_HANDLER_MISSING_MESSAGE.test(e.message);
+  }
+  return false;
+};
 
 // ~60s budget — Worker reconcile uploads typically land in 2–10s,
 // but a fresh container/asset deploy can stretch that.

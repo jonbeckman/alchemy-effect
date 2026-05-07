@@ -13,9 +13,9 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { pipe } from "effect/Function";
 import * as Layer from "effect/Layer";
-import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
+import { isHttpClientError } from "effect/unstable/http/HttpClientError";
 import { Command, CommandProvider } from "../Build/Command.ts";
 import * as Provider from "../Provider.ts";
 import { Random, RandomProvider } from "../Random.ts";
@@ -590,21 +590,16 @@ export const providers = () =>
     Layer.orDie,
   );
 
-// Effect's `HttpClient` raises a tagged `HttpClientError` whose `reason`
-// is one of `TransportError | EncodeError | DecodeError | InvalidUrlError
-// | StatusCodeError | EmptyBodyError`. The `TransportError` variant wraps
-// connection-level failures from undici (`ConnectTimeoutError`, dropped
-// sockets, DNS hiccups) — none of which distilled tags as a `NetworkError`
-// category, so distilled's `isTransientError` doesn't catch them. They're
-// fundamentally retryable: the request never reached AWS at all.
-const isHttpTransportError = (error: unknown): boolean => {
-  if (!Predicate.isObject(error)) return false;
-  const e = error as { _tag?: string; reason?: { _tag?: string } };
-  return (
-    e._tag === "HttpClientError" &&
-    (e.reason?._tag === "TransportError" || e.reason?._tag === "EmptyBodyError")
-  );
-};
+// Effect's `HttpClient` wraps connection-level failures from undici
+// (`ConnectTimeoutError`, dropped sockets, DNS hiccups) in
+// `HttpClientError { reason: TransportError | EmptyBodyError | ... }`.
+// Distilled doesn't tag these as `NetworkError`, so `isTransientError`
+// misses them; treat them as retryable since the request never reached
+// AWS at all.
+const isHttpTransportError = (error: unknown): boolean =>
+  isHttpClientError(error) &&
+  (error.reason._tag === "TransportError" ||
+    error.reason._tag === "EmptyBodyError");
 
 const awsRetryFactory: RetryFactory = (lastError) => ({
   while: (error) =>

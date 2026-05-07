@@ -1,4 +1,10 @@
 import { Retry } from "@distilled.cloud/cloudflare";
+import { CloudflareHttpError } from "@distilled.cloud/cloudflare/Errors";
+import {
+  Forbidden,
+  TooManyRequests,
+  Unauthorized,
+} from "@distilled.cloud/core/errors";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { pipe } from "effect/Function";
@@ -134,26 +140,32 @@ export const providers = () =>
   );
 
 const isMisleadinglyTaggedTransient = (error: unknown): boolean => {
-  if (!error || typeof error !== "object") return false;
-  const tag = (error as { _tag?: unknown })._tag;
-  const status = (error as { status?: unknown }).status;
-  const message = ((error as { message?: unknown }).message ?? "") as string;
   // CF code 10001: "Method not allowed for token" is a real permission
   // failure (NOT retryable), but the same code is also returned with
   // message "internal error" during Cloudflare-side hiccups. The two
   // messages are unambiguously distinct, so we can safely retry only
   // the internal-error variant.
-  if (tag === "Forbidden" && /internal error/i.test(message)) return true;
+  if (error instanceof Forbidden && /internal error/i.test(error.message)) {
+    return true;
+  }
   // `CloudflareHttpError` is the catch-all distilled raises when CF
   // returns a non-JSON body (HTML 520 pages, edge auth blips that
   // produce a bare `Unauthorized`, etc.). 401/403/5xx of this shape
   // are not API-level permission failures — they're CF-edge transients
   // that consistently clear within a few seconds. Retry them.
   if (
-    tag === "CloudflareHttpError" &&
-    typeof status === "number" &&
-    (status === 401 || status === 403 || status >= 500)
+    error instanceof CloudflareHttpError &&
+    (error.status === 401 || error.status === 403 || error.status >= 500)
   ) {
+    return true;
+  }
+  // CF code 10000 maps to `Unauthorized: Authentication error`. Distilled
+  // deliberately doesn't auto-retry — the same code+message is used for
+  // both transient auth-edge blips and a genuinely invalid token, so a
+  // long retry would silently loop on real auth failures. We still
+  // retry it here, but the surrounding schedule's `recurs(8)` cap means
+  // a genuinely-invalid token surfaces within ~22s — acceptable.
+  if (error instanceof Unauthorized) {
     return true;
   }
   return false;
@@ -171,9 +183,10 @@ const cloudflareRetryFactory: Retry.Factory = (lastError) => {
           const error = yield* Ref.get(lastError);
           // Throttling errors (429): honor a 500ms floor matching the
           // distilled default.
-          const isThrottling =
-            (error as { _tag?: unknown })?._tag === "TooManyRequests";
-          if (isThrottling && Duration.toMillis(duration) < 500) {
+          if (
+            error instanceof TooManyRequests &&
+            Duration.toMillis(duration) < 500
+          ) {
             return Duration.toMillis(Duration.millis(500));
           }
           return Duration.toMillis(duration);

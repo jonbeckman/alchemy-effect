@@ -1,6 +1,7 @@
 import { Region } from "@distilled.cloud/aws/Region";
 import * as sqs from "@distilled.cloud/aws/sqs";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Schedule from "effect/Schedule";
 import { Unowned } from "../../AdoptPolicy.ts";
 import { isResolved } from "../../Diff.ts";
@@ -157,6 +158,19 @@ export interface Queue extends Resource<
  */
 export const Queue = Resource<Queue>("AWS.SQS.Queue");
 
+/**
+ * SQS is eventually consistent post-`CreateQueue`: every queue-targeted
+ * call against a same-tick-created queue can briefly return
+ * `QueueDoesNotExist` for a few hundred ms while the new queue
+ * propagates across the SQS frontends. Wrap any such call with this
+ * helper to absorb that window. Bounded to ~30s so a genuinely-missing
+ * queue still surfaces.
+ */
+const tolerateMissingQueue = Effect.retry({
+  while: Predicate.isTagged("QueueDoesNotExist"),
+  schedule: Schedule.fixed(500).pipe(Schedule.both(Schedule.recurs(60))),
+}) as <A, R, E>(self: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+
 export const QueueProvider = () =>
   Provider.effect(
     Queue,
@@ -293,7 +307,7 @@ export const QueueProvider = () =>
               })
               .pipe(
                 Effect.retry({
-                  while: (e) => e._tag === "QueueDeletedRecently",
+                  while: Predicate.isTagged("QueueDeletedRecently"),
                   schedule: Schedule.fixed(1000).pipe(
                     Schedule.tapOutput((i) =>
                       session.note(
@@ -314,25 +328,21 @@ export const QueueProvider = () =>
           // and `desiredAttributes` is already string-shaped, so equality
           // comparison is direct.
           //
-          // SQS is eventually consistent post-`CreateQueue`: a same-tick
-          // `GetQueueAttributes` (or `GetQueueUrl`) on a freshly-created
-          // queue can briefly return `QueueDoesNotExist` for a few hundred
-          // ms while the new queue propagates across the SQS frontends.
-          // Retry on that specific tag so first-deploy reconciles don't
-          // fail spuriously; bound the retry to 30s so a genuinely-missing
-          // queue still surfaces quickly.
+          // SQS is eventually consistent post-`CreateQueue`: every
+          // queue-targeted call (`GetQueueAttributes`, `SetQueueAttributes`,
+          // `ListQueueTags`, `TagQueue`) on a freshly-created queue can
+          // briefly return `QueueDoesNotExist` for a few hundred ms while
+          // the new queue propagates across the SQS frontends. Wrap each
+          // post-create call with `tolerateMissingQueue` so first-deploy
+          // reconciles don't fail spuriously; the retry is bounded to ~30s
+          // so a genuinely-missing queue still surfaces quickly.
           const currentAttributes = yield* sqs
             .getQueueAttributes({
               QueueUrl: queueUrl,
               AttributeNames: ["All"],
             })
             .pipe(
-              Effect.retry({
-                while: (e) => e._tag === "QueueDoesNotExist",
-                schedule: Schedule.fixed(500).pipe(
-                  Schedule.both(Schedule.recurs(60)),
-                ),
-              }),
+              tolerateMissingQueue,
               Effect.map((r) => r.Attributes ?? {}),
             );
 
@@ -346,10 +356,12 @@ export const QueueProvider = () =>
             }
           }
           if (Object.keys(attributeDelta).length > 0) {
-            yield* sqs.setQueueAttributes({
-              QueueUrl: queueUrl,
-              Attributes: attributeDelta,
-            });
+            yield* sqs
+              .setQueueAttributes({
+                QueueUrl: queueUrl,
+                Attributes: attributeDelta,
+              })
+              .pipe(tolerateMissingQueue);
           }
 
           // Sync alchemy-owned tags. The `tags` parameter on `createQueue`
@@ -358,6 +370,7 @@ export const QueueProvider = () =>
           const currentTags = yield* sqs
             .listQueueTags({ QueueUrl: queueUrl })
             .pipe(
+              tolerateMissingQueue,
               Effect.map((r) => r.Tags ?? {}),
               Effect.catch(() => Effect.succeed({} as Record<string, string>)),
             );
@@ -368,7 +381,9 @@ export const QueueProvider = () =>
             }
           }
           if (Object.keys(tagDelta).length > 0) {
-            yield* sqs.tagQueue({ QueueUrl: queueUrl, Tags: tagDelta });
+            yield* sqs
+              .tagQueue({ QueueUrl: queueUrl, Tags: tagDelta })
+              .pipe(tolerateMissingQueue);
           }
 
           yield* session.note(queueUrl);

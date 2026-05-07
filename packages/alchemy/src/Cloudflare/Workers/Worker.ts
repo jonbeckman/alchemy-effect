@@ -11,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
@@ -1105,11 +1106,7 @@ export const LiveWorkerProvider = () =>
           previewsEnabled: enabled ? true : undefined,
         }).pipe(
           Effect.retry({
-            while: (e) =>
-              typeof e === "object" &&
-              e !== null &&
-              "_tag" in e &&
-              e._tag === "WorkerNotFound",
+            while: Predicate.isTagged("WorkerNotFound"),
             schedule: Schedule.fixed(500).pipe(
               Schedule.both(Schedule.recurs(60)),
             ),
