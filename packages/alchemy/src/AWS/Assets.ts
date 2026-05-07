@@ -5,29 +5,9 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schedule from "effect/Schedule";
 import type { HttpClient } from "effect/unstable/http/HttpClient";
 
 import { lookupAssetsBucket } from "./Bootstrap.ts";
-
-/**
- * S3 throttles `PutObject` per-prefix at modest QPS (the well-known
- * "503 SlowDown" / "Please reduce your request rate" response). Distilled
- * surfaces these as `UnknownAwsError` with `errorTag: "SlowDown"` because
- * they're not part of the official PutObject error model. They are always
- * safe to retry with backoff — the request never reached S3's storage
- * tier — and the same alchemy stack uploading lots of Lambda code in a
- * burst will trip this on a busy account.
- */
-const isS3SlowDown = (error: unknown): boolean => {
-  if (typeof error !== "object" || error === null) return false;
-  const e = error as { _tag?: string; errorTag?: string };
-  return e._tag === "UnknownAwsError" && e.errorTag === "SlowDown";
-};
-
-const s3SlowDownRetry = Schedule.exponential(500).pipe(
-  Schedule.both(Schedule.recurs(8)), // ~0.5 + 1 + 2 + 4 + ... ≈ 64s budget
-);
 
 /**
  * Error type for Assets service operations.
@@ -111,7 +91,6 @@ const createAssetsService = (bucketName: string): typeof Assets.Service => ({
       const exists = yield* s3
         .headObject({ Bucket: bucketName, Key: key })
         .pipe(
-          Effect.retry({ while: isS3SlowDown, schedule: s3SlowDownRetry }),
           Effect.map(() => true),
           Effect.catchTag("NotFound", () => Effect.succeed(false)),
         );
@@ -124,19 +103,12 @@ const createAssetsService = (bucketName: string): typeof Assets.Service => ({
       }
 
       // Upload the asset
-      yield* s3
-        .putObject({
-          Bucket: bucketName,
-          Key: key,
-          Body: content,
-          ContentType: "application/zip",
-        })
-        .pipe(
-          Effect.retry({
-            while: isS3SlowDown,
-            schedule: s3SlowDownRetry,
-          }),
-        );
+      yield* s3.putObject({
+        Bucket: bucketName,
+        Key: key,
+        Body: content,
+        ContentType: "application/zip",
+      });
 
       yield* Effect.logDebug(`Uploaded asset: s3://${bucketName}/${key}`);
       return key;
