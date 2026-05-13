@@ -1,6 +1,7 @@
 import type * as cf from "@cloudflare/workers-types";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type { HttpServerError } from "effect/unstable/http/HttpServerError";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
@@ -607,10 +608,14 @@ export const DurableObjectNamespace: DurableObjectNamespaceClass =
                 kind: "durableObject",
                 make: (state: cf.DurableObjectState, env: any) => {
                   const doState = fromDurableObjectState(state);
+                  const layer = Layer.mergeAll(
+                    Layer.succeedContext(services),
+                    Layer.succeed(DurableObjectState, doState),
+                    Layer.succeed(WorkerEnvironment, env),
+                  );
+
                   return constructor.pipe(
-                    Effect.provideContext(services),
-                    Effect.provideService(DurableObjectState, doState),
-                    Effect.provideService(WorkerEnvironment, env),
+                    Effect.provide(layer),
                     Effect.map((methods: any) => {
                       const wrapped: Record<string, unknown> = {};
                       for (const key of Object.getOwnPropertyNames(methods)) {
@@ -618,21 +623,14 @@ export const DurableObjectNamespace: DurableObjectNamespaceClass =
                         if (Effect.isEffect(value)) {
                           wrapped[key] = (
                             value as Effect.Effect<any, any, any>
-                          ).pipe(
-                            Effect.provideService(DurableObjectState, doState),
-                          );
+                          ).pipe(Effect.provide(layer));
                         } else if (typeof value === "function") {
                           wrapped[key] = (...args: unknown[]) => {
                             const result = (value as Function)(...args);
                             if (Effect.isEffect(result)) {
                               return (
                                 result as Effect.Effect<any, any, any>
-                              ).pipe(
-                                Effect.provideService(
-                                  DurableObjectState,
-                                  doState,
-                                ),
-                              );
+                              ).pipe(Effect.provide(layer));
                             }
                             return result;
                           };

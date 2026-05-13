@@ -152,6 +152,108 @@ test(
 );
 
 test(
+  "deployed worker invokes a tool via AiGateway-backed LanguageModel",
+  Effect.gen(function* () {
+    const out = yield* stack;
+    const client = yield* HttpClient.HttpClient;
+
+    const res = yield* client
+      .get(
+        `${out.url}/tool?prompt=${encodeURIComponent(
+          "What's the weather in San Francisco?",
+        )}`,
+      )
+      .pipe(
+        Effect.retry({
+          schedule: Schedule.exponential("500 millis"),
+          times: 10,
+        }),
+      );
+    if (res.status !== 200) {
+      console.error("tool error body:", yield* res.text);
+    }
+    expect(res.status).toBe(200);
+
+    const body = (yield* res.json) as {
+      text: string;
+      finishReason: string;
+      toolCalls: Array<{
+        id: string;
+        name: string;
+        params: { city: string };
+      }>;
+      toolResults: Array<{
+        id: string;
+        name: string;
+        result: { city: string; temperatureF: number; condition: string };
+        isFailure: boolean;
+      }>;
+    };
+
+    expect(body.toolCalls.length).toBeGreaterThan(0);
+    const call = body.toolCalls[0]!;
+    expect(call.name).toBe("get_weather");
+    expect(typeof call.params.city).toBe("string");
+    expect(call.params.city.toLowerCase()).toContain("san francisco");
+
+    expect(body.toolResults.length).toBeGreaterThan(0);
+    const result = body.toolResults[0]!;
+    expect(result.name).toBe("get_weather");
+    expect(result.isFailure).toBe(false);
+    expect(result.result.temperatureF).toBe(72);
+    expect(result.result.condition).toBe("sunny");
+  }).pipe(logLevel),
+  { timeout: 180_000 },
+);
+
+test(
+  "streams tool-call parts via AiGateway-backed LanguageModel",
+  Effect.gen(function* () {
+    const out = yield* stack;
+    const client = yield* HttpClient.HttpClient;
+
+    const res = yield* client
+      .get(
+        `${out.url}/tool-stream?prompt=${encodeURIComponent(
+          "What's the weather in Seattle?",
+        )}`,
+      )
+      .pipe(
+        Effect.retry({
+          schedule: Schedule.exponential("500 millis"),
+          times: 10,
+        }),
+      );
+    expect(res.status).toBe(200);
+
+    const sse = yield* res.text;
+    const parts = sse
+      .split("\n\n")
+      .map((frame) => frame.replace(/^data:\s*/, "").trim())
+      .filter((line) => line.length > 0)
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type: string;
+            name?: string;
+            delta?: string;
+            id?: string;
+          },
+      );
+
+    const toolParamsStart = parts.filter((p) => p.type === "tool-params-start");
+    const toolParamsDeltas = parts.filter(
+      (p) => p.type === "tool-params-delta",
+    );
+
+    expect(toolParamsStart.length).toBeGreaterThan(0);
+    expect((toolParamsStart[0] as { name?: string }).name).toBe("get_weather");
+    expect(toolParamsDeltas.length).toBeGreaterThan(0);
+  }).pipe(logLevel),
+  { timeout: 180_000 },
+);
+
+test(
   "streams Effect-native parts and prints them live",
   Effect.gen(function* () {
     const out = yield* stack;

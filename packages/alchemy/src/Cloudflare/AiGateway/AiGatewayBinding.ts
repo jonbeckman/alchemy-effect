@@ -4,10 +4,15 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type { LanguageModel } from "effect/unstable/ai/LanguageModel";
 import * as Binding from "../../Binding.ts";
 import type { ResourceLike } from "../../Resource.ts";
 import { isWorker, WorkerEnvironment } from "../Workers/Worker.ts";
 import type { AiGateway as AiGatewayResource } from "./AiGateway.ts";
+import {
+  makeLanguageModelLayer,
+  type LanguageModelOptions,
+} from "./LanguageModel.ts";
 
 /**
  * Error raised by AI Gateway runtime operations.
@@ -71,6 +76,10 @@ export interface AiGatewayClient {
     data: Parameters<AiGateway["run"]>[0],
     options?: Parameters<AiGateway["run"]>[1],
   ): Effect.Effect<Response, AiGatewayError, WorkerEnvironment>;
+
+  model(
+    options: LanguageModelOptions,
+  ): Layer.Layer<LanguageModel, never, WorkerEnvironment>;
 }
 
 /**
@@ -146,6 +155,7 @@ export const AiGatewayBindingLive = Layer.effect(
         getLog: (logId) => use((gateway) => gateway.getLog(logId)),
         getUrl: (provider) => use((gateway) => gateway.getUrl(provider)),
         run: (data, options) => use((gateway) => gateway.run(data, options)),
+        model: (options) => makeLanguageModelLayer(options),
       } satisfies AiGatewayClient;
     });
   }),

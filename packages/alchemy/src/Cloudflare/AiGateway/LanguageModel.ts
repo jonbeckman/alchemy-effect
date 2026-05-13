@@ -3,8 +3,8 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import {
   AiError,
-  IdGenerator,
   LanguageModel as AiLanguageModel,
+  IdGenerator,
   Prompt,
   Response,
   Tool,
@@ -16,7 +16,7 @@ import type { AiGatewayClient } from "./AiGatewayBinding.ts";
 /**
  * Options for constructing an AI Gateway-backed Workers AI LanguageModel.
  */
-export interface Options {
+export interface LanguageModelOptions {
   /** Already-bound AI Gateway client from `AiGatewayBinding.bind(gateway)`. */
   readonly client: AiGatewayClient;
   /** Workers AI model id, e.g. `@cf/meta/llama-3.3-70b-instruct-fp8-fast`. */
@@ -32,6 +32,73 @@ export interface Options {
     readonly presencePenalty?: number;
   };
 }
+
+/**
+ * Provide a {@link AiLanguageModel.LanguageModel} layer backed by the supplied
+ * AI Gateway client and Workers AI model.
+ */
+export const makeLanguageModelLayer = (
+  options: LanguageModelOptions,
+): Layer.Layer<AiLanguageModel.LanguageModel, never, WorkerEnvironment> =>
+  Layer.effect(AiLanguageModel.LanguageModel, makeLanguageModel(options));
+
+/**
+ * Build a {@link AiLanguageModel.Service} that proxies generateText/streamText
+ * through the supplied AI Gateway client to a Workers AI model.
+ */
+export const makeLanguageModel = ({
+  client,
+  model,
+  parameters,
+}: LanguageModelOptions): Effect.Effect<
+  AiLanguageModel.Service,
+  never,
+  WorkerEnvironment
+> =>
+  Effect.gen(function* () {
+    const env = yield* WorkerEnvironment;
+    const ai = yield* client.raw;
+    const gatewayId = yield* client.id;
+
+    const callRaw = (
+      body: WorkersAiInputs,
+      method: "generateText" | "streamText",
+    ): Effect.Effect<Response, AiError.AiError> =>
+      Effect.tryPromise({
+        try: () =>
+          ai.run(
+            model as keyof AiModels,
+            body as unknown as AiModels[keyof AiModels]["inputs"],
+            {
+              gateway: { id: gatewayId },
+              returnRawResponse: true,
+            },
+          ),
+        catch: (cause) => toAiError(cause, method),
+      }).pipe(Effect.provideService(WorkerEnvironment, env));
+
+    return yield* AiLanguageModel.make({
+      generateText: (options) =>
+        Effect.gen(function* () {
+          const body = toRequestBody({ options, parameters, stream: false });
+          const resp = yield* callRaw(body, "generateText");
+          const json = yield* Effect.tryPromise({
+            try: () => resp.json() as Promise<Record<string, unknown>>,
+            catch: (cause) => toAiError(cause, "generateText"),
+          });
+          return yield* parseGenerateText(json);
+        }),
+      streamText: (options) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const idGenerator = yield* IdGenerator.IdGenerator;
+            const body = toRequestBody({ options, parameters, stream: true });
+            const resp = yield* callRaw(body, "streamText");
+            return parseStreamText(resp, idGenerator);
+          }),
+        ),
+    });
+  });
 
 // ---------------------------------------------------------------------------
 // Wire format types (Workers AI request/response)
@@ -272,7 +339,7 @@ const toRequestBody = ({
   stream,
 }: {
   readonly options: AiLanguageModel.ProviderOptions;
-  readonly parameters: Options["parameters"];
+  readonly parameters: LanguageModelOptions["parameters"];
   readonly stream: boolean;
 }): WorkersAiInputs => {
   const messages = convertPromptToMessages(options.prompt);
@@ -797,66 +864,3 @@ const toAiError = (
         cause instanceof Error ? cause.message : "AI Gateway request failed",
     }),
   });
-
-/**
- * Build a {@link AiLanguageModel.Service} that proxies generateText/streamText
- * through the supplied AI Gateway client to a Workers AI model.
- */
-export const make = ({
-  client,
-  model,
-  parameters,
-}: Options): Effect.Effect<AiLanguageModel.Service, never, WorkerEnvironment> =>
-  Effect.gen(function* () {
-    const env = yield* WorkerEnvironment;
-    const ai = yield* client.raw;
-    const gatewayId = yield* client.id;
-
-    const callRaw = (
-      body: WorkersAiInputs,
-      method: "generateText" | "streamText",
-    ): Effect.Effect<Response, AiError.AiError> =>
-      Effect.tryPromise({
-        try: () =>
-          ai.run(
-            model as keyof AiModels,
-            body as unknown as AiModels[keyof AiModels]["inputs"],
-            {
-              gateway: { id: gatewayId },
-              returnRawResponse: true,
-            },
-          ),
-        catch: (cause) => toAiError(cause, method),
-      }).pipe(Effect.provideService(WorkerEnvironment, env));
-
-    return yield* AiLanguageModel.make({
-      generateText: (options) =>
-        Effect.gen(function* () {
-          const body = toRequestBody({ options, parameters, stream: false });
-          const resp = yield* callRaw(body, "generateText");
-          const json = yield* Effect.tryPromise({
-            try: () => resp.json() as Promise<Record<string, unknown>>,
-            catch: (cause) => toAiError(cause, "generateText"),
-          });
-          return yield* parseGenerateText(json);
-        }),
-      streamText: (options) =>
-        Stream.unwrap(
-          Effect.gen(function* () {
-            const idGenerator = yield* IdGenerator.IdGenerator;
-            const body = toRequestBody({ options, parameters, stream: true });
-            const resp = yield* callRaw(body, "streamText");
-            return parseStreamText(resp, idGenerator);
-          }),
-        ),
-    });
-  });
-
-/**
- * Provide a {@link AiLanguageModel.LanguageModel} layer backed by the supplied
- * AI Gateway client and Workers AI model.
- */
-export const layer = (
-  options: Options,
-): Layer.Layer<AiLanguageModel.LanguageModel, never, WorkerEnvironment> =>
-  Layer.effect(AiLanguageModel.LanguageModel, make(options));

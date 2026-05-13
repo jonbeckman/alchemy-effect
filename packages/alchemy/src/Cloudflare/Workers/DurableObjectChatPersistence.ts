@@ -18,7 +18,7 @@ import { DurableObjectState } from "./DurableObjectState.ts";
  * TTL is currently ignored; Durable Object storage has no native TTL. If you
  * need expiry, layer a TTL-aware backing store on top.
  */
-export const layer = Layer.effect(BackingPersistence)(
+export const DurableObjectChatPersistence = Layer.effect(BackingPersistence)(
   Effect.gen(function* () {
     const state = yield* DurableObjectState;
     const storage = state.storage;

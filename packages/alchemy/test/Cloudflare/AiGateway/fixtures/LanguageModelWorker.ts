@@ -1,14 +1,44 @@
 import * as Cloudflare from "@/Cloudflare/index.ts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { LanguageModel as AiLanguageModel } from "effect/unstable/ai";
+import {
+  LanguageModel as AiLanguageModel,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 import { HttpServerRequest } from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import ChatAgent from "./ChatAgent.ts";
 import { Gateway } from "./Gateway.ts";
 
 const MODEL = "@cf/meta/llama-3.1-8b-instruct";
+const TOOL_MODEL = "@cf/moonshotai/kimi-k2.6";
+
+const GetWeather = Tool.make("get_weather", {
+  description:
+    "Get the current weather for a city. Always call this tool when the user asks about the weather.",
+  parameters: Schema.Struct({
+    city: Schema.String,
+  }),
+  success: Schema.Struct({
+    city: Schema.String,
+    temperatureF: Schema.Number,
+    condition: Schema.String,
+  }),
+});
+
+const WeatherToolkit = Toolkit.make(GetWeather);
+
+const WeatherToolkitLayer = WeatherToolkit.toLayer({
+  get_weather: ({ city }) =>
+    Effect.succeed({
+      city,
+      temperatureF: 72,
+      condition: "sunny",
+    }),
+});
 
 export default class LanguageModelTestWorker extends Cloudflare.Worker<LanguageModelTestWorker>()(
   "LanguageModelTestWorker",
@@ -19,10 +49,16 @@ export default class LanguageModelTestWorker extends Cloudflare.Worker<LanguageM
   },
   Effect.gen(function* () {
     const aiGateway = yield* Cloudflare.AiGateway.bind(Gateway);
-    const languageModel = Cloudflare.AiGatewayLanguageModel.layer({
+
+    const languageModel = aiGateway.model({
       client: aiGateway,
       model: MODEL,
       parameters: { temperature: 0.7, maxTokens: 1024 },
+    });
+    const toolLanguageModel = aiGateway.model({
+      client: aiGateway,
+      model: TOOL_MODEL,
+      parameters: { temperature: 0.2, maxTokens: 1024 },
     });
     const chatAgents = yield* ChatAgent;
 
@@ -37,9 +73,10 @@ export default class LanguageModelTestWorker extends Cloudflare.Worker<LanguageM
 
         if (url.pathname === "/chat") {
           const id = url.searchParams.get("id") ?? "default";
+          const threadId = url.searchParams.get("threadId") ?? "default";
           return yield* chatAgents
             .getByName(id)
-            .send(prompt)
+            .send(threadId, prompt)
             .pipe(
               Effect.flatMap((result) => HttpServerResponse.json(result)),
               Effect.catchCause((cause) =>
@@ -76,6 +113,52 @@ export default class LanguageModelTestWorker extends Cloudflare.Worker<LanguageM
                 Effect.as(encoder.encode(`data: chunk-${i}\n\n`)),
               ),
             ),
+          );
+          return HttpServerResponse.stream(body, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+
+        if (url.pathname === "/tool") {
+          const response = yield* AiLanguageModel.generateText({
+            prompt,
+            toolkit: WeatherToolkit,
+            toolChoice: "required",
+          }).pipe(
+            Effect.provide(WeatherToolkitLayer),
+            Effect.provide(toolLanguageModel),
+            Effect.orDie,
+          );
+          return yield* HttpServerResponse.json({
+            text: response.text,
+            finishReason: response.finishReason,
+            toolCalls: response.toolCalls.map((call) => ({
+              id: call.id,
+              name: call.name,
+              params: call.params,
+            })),
+            toolResults: response.toolResults.map((result) => ({
+              id: result.id,
+              name: result.name,
+              result: result.result,
+              isFailure: result.isFailure,
+            })),
+          });
+        }
+
+        if (url.pathname === "/tool-stream") {
+          const encoder = new TextEncoder();
+          const body = AiLanguageModel.streamText({
+            prompt,
+            toolkit: WeatherToolkit,
+            toolChoice: "required",
+          }).pipe(
+            Stream.map((part) =>
+              encoder.encode(`data: ${JSON.stringify(part)}\n\n`),
+            ),
+            Stream.provide(WeatherToolkitLayer),
+            Stream.provide(toolLanguageModel),
+            Stream.provideService(Cloudflare.WorkerEnvironment, env),
           );
           return HttpServerResponse.stream(body, {
             headers: { "content-type": "text/event-stream" },
