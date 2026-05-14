@@ -140,19 +140,31 @@ return Effect.gen(function* () {
 +  const chat = yield* persistence.getOrCreate("session");
   return {};
 +}).pipe(
-+  Effect.provide(languageModel),
-+  Effect.provide(Chat.layerPersisted({ storeId: "chat" })),
-+  Effect.provide(Cloudflare.DurableObjectChatPersistence),
++  Effect.provide(
++    Layer.mergeAll(
++      languageModel,
++      Chat.layerPersisted({ storeId: "chat" }).pipe(
++        Layer.provideMerge(Cloudflare.DurableObjectChatPersistence),
++      ),
++    ),
++  ),
 +);
 ```
 
-Reading bottom-up, the layer chain is:
+The layer chain has three pieces:
 
-1. `DurableObjectChatPersistence` — produces a
-   `BackingPersistence` from `state.storage`.
-2. `Chat.layerPersisted({ storeId: "chat" })` — produces a
-   `Chat.Persistence` keyed by chat id, persisted via the backing.
-3. `languageModel` — the Workers AI `LanguageModel.LanguageModel`.
+- `DurableObjectChatPersistence` — produces a `BackingPersistence`
+  from `state.storage`.
+- `Chat.layerPersisted({ storeId: "chat" })` — produces a
+  `Chat.Persistence` keyed by chat id, persisted via the backing.
+- `languageModel` — the Workers AI `LanguageModel.LanguageModel`.
+
+`Layer.provideMerge` plugs `DurableObjectChatPersistence` into
+`Chat.layerPersisted` while still exposing `BackingPersistence` to
+the handler (the `reset` helper reads it to hard-delete a thread).
+`Layer.mergeAll` then composes that with the independent
+`languageModel`, and a single `Effect.provide(...)` installs the
+whole thing on the handler.
 
 `persistence.getOrCreate("session")` looks up the chat by id; on
 the first call it creates a fresh empty one and saves it, on every
@@ -180,9 +192,14 @@ return Effect.gen(function* () {
 +      }).pipe(Effect.orDie),
 +  };
 }).pipe(
-  Effect.provide(languageModel),
-  Effect.provide(Chat.layerPersisted({ storeId: "chat" })),
-  Effect.provide(Cloudflare.DurableObjectChatPersistence),
+  Effect.provide(
+    Layer.mergeAll(
+      languageModel,
+      Chat.layerPersisted({ storeId: "chat" }).pipe(
+        Layer.provideMerge(Cloudflare.DurableObjectChatPersistence),
+      ),
+    ),
+  ),
 );
 ```
 

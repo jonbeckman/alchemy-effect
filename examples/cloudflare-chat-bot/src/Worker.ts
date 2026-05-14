@@ -2,7 +2,7 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
 import { HttpServerRequest } from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import ChatAgent from "./Agent.ts";
+import ChatAgent, { isModelOption, type ModelOption } from "./Agent.ts";
 
 const corsHeaders = {
   "access-control-allow-origin": "*",
@@ -55,7 +55,10 @@ export default class Worker extends Cloudflare.Worker<Worker>()(
         const agent = agents.getByName(id);
 
         if (url.pathname === "/api/chat" && request.method === "POST") {
-          const body = (yield* request.json) as { prompt?: string };
+          const body = (yield* request.json) as {
+            prompt?: string;
+            model?: string;
+          };
           const prompt = body.prompt?.trim();
           if (!prompt) {
             return yield* json(
@@ -63,30 +66,24 @@ export default class Worker extends Cloudflare.Worker<Worker>()(
               { status: 400 },
             );
           }
-          return yield* agent.send(threadId, prompt).pipe(
-            Effect.flatMap((result) => json(result)),
-            Effect.catchCause((cause) =>
-              json({ error: String(cause) }, { status: 500 }),
-            ),
-          );
+          const model: ModelOption = isModelOption(body.model)
+            ? body.model
+            : "kimi";
+          return yield* agent
+            .send(threadId, prompt, model)
+            .pipe(Effect.flatMap((result) => json(result)));
         }
 
         if (url.pathname === "/api/messages" && request.method === "GET") {
-          return yield* agent.messages(threadId).pipe(
-            Effect.flatMap((result) => json(result)),
-            Effect.catchCause((cause) =>
-              json({ error: String(cause) }, { status: 500 }),
-            ),
-          );
+          return yield* agent
+            .messages(threadId)
+            .pipe(Effect.flatMap((result) => json(result)));
         }
 
         if (url.pathname === "/api/reset" && request.method === "POST") {
-          return yield* agent.reset(threadId).pipe(
-            Effect.flatMap((result) => json(result)),
-            Effect.catchCause((cause) =>
-              json({ error: String(cause) }, { status: 500 }),
-            ),
-          );
+          return yield* agent
+            .reset(threadId)
+            .pipe(Effect.flatMap((result) => json(result)));
         }
 
         return HttpServerResponse.text("Not Found", {

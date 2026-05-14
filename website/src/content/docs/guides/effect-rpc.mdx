@@ -221,6 +221,7 @@ or `Etag.layer` — the RPC server handles message framing internally.
 // src/worker.ts
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { Tasks } from "./bucket.ts";
@@ -262,8 +263,7 @@ export default Cloudflare.Worker(
 
     return {
       fetch: RpcServer.toHttpEffect(TaskRpcs).pipe(
-        Effect.provide(handlersLayer),
-        Effect.provide(RpcSerialization.layerJson),
+        Effect.provide(Layer.mergeAll(handlersLayer, RpcSerialization.layerJson)),
       ),
     };
   }).pipe(Effect.provide(Cloudflare.R2BucketBindingLive)),
@@ -304,6 +304,7 @@ typed client — no codegen. `client.createTask` accepts
 ```typescript
 // scripts/client.ts
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { FetchHttpClient } from "effect/unstable/http/FetchHttpClient";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
@@ -322,12 +323,12 @@ const program = Effect.gen(function* () {
 Effect.runPromise(
   program.pipe(
     Effect.provide(
-      RpcClient.layerProtocolHttp({
-        url: process.env.TASK_RPC_URL!,
-      }),
+      Layer.mergeAll(
+        RpcClient.layerProtocolHttp({ url: process.env.TASK_RPC_URL! }),
+        RpcSerialization.layerJson,
+        FetchHttpClient.layer,
+      ),
     ),
-    Effect.provide(RpcSerialization.layerJson),
-    Effect.provide(FetchHttpClient.layer),
   ),
 );
 ```

@@ -1,9 +1,16 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import type { ChatMessage } from "./Agent.ts";
+import type { ChatMessage, ModelOption } from "./Agent.ts";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
 const SESSION_KEY = "chat-bot:session-id";
+const MODEL_KEY = "chat-bot:model";
+
+const MODELS: ReadonlyArray<{ value: ModelOption; label: string }> = [
+  { value: "kimi", label: "Kimi K2.6 (Cloudflare)" },
+  { value: "gpt", label: "GPT-5.4 Nano (OpenAI)" },
+  { value: "claude", label: "Claude Haiku 4.5 (Anthropic)" },
+];
 
 const getSessionId = (): string => {
   const existing = localStorage.getItem(SESSION_KEY);
@@ -34,6 +41,20 @@ const styles = {
     borderBottom: "1px solid #e5e7eb",
   },
   title: { fontSize: 18, fontWeight: 600 },
+  headerActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  modelSelect: {
+    border: "1px solid #d1d5db",
+    borderRadius: 6,
+    padding: "4px 8px",
+    fontSize: 12,
+    color: "#374151",
+    background: "white",
+    cursor: "pointer",
+  },
   resetButton: {
     background: "transparent",
     border: "1px solid #d1d5db",
@@ -97,15 +118,25 @@ const styles = {
   },
 };
 
+const getStoredModel = (): ModelOption => {
+  const stored = localStorage.getItem(MODEL_KEY);
+  return MODELS.find((m) => m.value === stored)?.value ?? "kimi";
+};
+
 function App() {
   const sessionId = React.useMemo(getSessionId, []);
   const [messages, setMessages] = React.useState<ReadonlyArray<ChatMessage>>(
     [],
   );
+  const [model, setModel] = React.useState<ModelOption>(getStoredModel);
   const [input, setInput] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | undefined>();
   const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    localStorage.setItem(MODEL_KEY, model);
+  }, [model]);
 
   const url = (path: string) =>
     `${API_URL}${path}?id=${encodeURIComponent(sessionId)}&threadId=default`;
@@ -149,7 +180,7 @@ function App() {
       const res = await fetch(url("/api/chat"), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, model }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       const data = (await res.json()) as {
@@ -183,9 +214,23 @@ function App() {
     <main style={styles.app}>
       <header style={styles.header}>
         <span style={styles.title}>Chat Bot</span>
-        <button type="button" style={styles.resetButton} onClick={reset}>
-          New chat
-        </button>
+        <div style={styles.headerActions}>
+          <select
+            style={styles.modelSelect}
+            value={model}
+            onChange={(e) => setModel(e.target.value as ModelOption)}
+            disabled={busy}
+          >
+            {MODELS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <button type="button" style={styles.resetButton} onClick={reset}>
+            New chat
+          </button>
+        </div>
       </header>
 
       <div ref={scrollRef} style={styles.messages}>

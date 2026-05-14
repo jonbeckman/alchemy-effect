@@ -1,9 +1,20 @@
+import { AnthropicClient, AnthropicLanguageModel } from "@effect/ai-anthropic";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { Chat, Prompt, Tool, Toolkit } from "effect/unstable/ai";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import { BackingPersistence } from "effect/unstable/persistence/Persistence";
+
+export const ModelOptions = ["kimi", "gpt", "claude"] as const;
+export type ModelOption = (typeof ModelOptions)[number];
+export const isModelOption = (value: unknown): value is ModelOption =>
+  typeof value === "string" &&
+  (ModelOptions as readonly string[]).includes(value);
 
 export const Gateway = Cloudflare.AiGateway("Gateway", {
   cacheTtl: 60,
@@ -124,13 +135,58 @@ export default class ChatAgent extends Cloudflare.DurableObjectNamespace<ChatAge
   "ChatAgent",
   Effect.gen(function* () {
     const ai = yield* Cloudflare.AiGateway.bind(Gateway);
+    const openAiKey = yield* Alchemy.Secret("OPENAI_API_KEY");
+    const anthropicKey = yield* Alchemy.Secret("ANTHROPIC_API_KEY");
 
-    const model = ai.model({
+    // Workers AI is constructed eagerly — `aiGateway.model` already
+    // resolves through Cloudflare's `Ai` binding, no API key needed.
+    const kimi = ai.model({
       client: ai,
       // Kimi K2.6 has strong tool-calling and a generous 262k context.
       model: "@cf/moonshotai/kimi-k2.6",
       parameters: { temperature: 0.3, maxTokens: 1024 },
     });
+
+    // OpenAI and Anthropic need their secret API key, which only resolves
+    // at runtime via the `Alchemy.Secret` accessor. `Layer.unwrapEffect`
+    // defers the layer build until the accessor produces a `Redacted`.
+    const gpt = Layer.unwrap(
+      Effect.gen(function* () {
+        const apiKey = yield* openAiKey;
+        const eff = OpenAiLanguageModel.layer({
+          model: "gpt-5.4-nano",
+          config: { temperature: 0.3 },
+        }).pipe(
+          Layer.provide(OpenAiClient.layer({ apiKey })),
+          Layer.provide(FetchHttpClient.layer),
+        );
+        return eff;
+      }),
+    );
+
+    const claude = Layer.unwrap(
+      Effect.gen(function* () {
+        const apiKey = yield* anthropicKey;
+        return AnthropicLanguageModel.layer({
+          model: "claude-haiku-4-5",
+          config: { max_tokens: 1024, temperature: 0.3 },
+        }).pipe(
+          Layer.provide(AnthropicClient.layer({ apiKey })),
+          Layer.provide(FetchHttpClient.layer),
+        );
+      }),
+    );
+
+    const modelLayer = (option: ModelOption) => {
+      switch (option) {
+        case "kimi":
+          return kimi;
+        case "gpt":
+          return gpt;
+        case "claude":
+          return claude;
+      }
+    };
 
     return Effect.gen(function* () {
       const persistence = yield* Chat.Persistence;
@@ -143,7 +199,7 @@ export default class ChatAgent extends Cloudflare.DurableObjectNamespace<ChatAge
       const store = yield* backing.make("chat");
 
       return {
-        send: (threadId: string, prompt: string) =>
+        send: (threadId: string, prompt: string, model: ModelOption) =>
           Effect.gen(function* () {
             const chat = yield* persistence.getOrCreate(threadId);
             // Seed the system prompt on the first turn so the model knows
@@ -165,14 +221,20 @@ export default class ChatAgent extends Cloudflare.DurableObjectNamespace<ChatAge
             const finalHistory = yield* Ref.get(chat.history);
             return {
               reply: response.text,
+              model,
               messages: exportMessages(finalHistory),
             };
           }).pipe(
-            Effect.provide(model),
-            Effect.provide(ChatToolkitLayer),
-            Effect.tapError(Effect.logError),
+            Effect.provide(Layer.mergeAll(modelLayer(model), ChatToolkitLayer)),
+            // Log full cause (including AiError's underlying cause) so a bad
+            // API key / network error / model-not-available surfaces in logs.
+            Effect.tapCause((cause) =>
+              Effect.logError(`ChatAgent.send failed`, cause),
+            ),
+            // Bounded retry — without `times` the worker spins on bad creds.
             Effect.retry({
               while: (err) => err._tag === "AiError",
+              times: 2,
             }),
           ),
 
@@ -190,8 +252,11 @@ export default class ChatAgent extends Cloudflare.DurableObjectNamespace<ChatAge
           }),
       };
     }).pipe(
-      Effect.provide(Chat.layerPersisted({ storeId: "chat" })),
-      Effect.provide(Cloudflare.DurableObjectChatPersistence),
+      Effect.provide(
+        Chat.layerPersisted({ storeId: "chat" }).pipe(
+          Layer.provideMerge(Cloudflare.DurableObjectChatPersistence),
+        ),
+      ),
       Effect.orDie,
     );
   }),

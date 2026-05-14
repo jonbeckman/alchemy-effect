@@ -54,6 +54,7 @@ In the Worker init phase, yield the queue resource and ask
 // src/Api.ts
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { Bucket } from "./Bucket.ts";
 import { Queue } from "./Queue.ts";
 
@@ -67,8 +68,12 @@ export default Cloudflare.Worker(
 
     return { fetch: Effect.gen(function* () { return new Response("ok"); }) };
   }).pipe(
-    Effect.provide(Cloudflare.QueueBindingLive),
-    Effect.provide(Cloudflare.R2BucketBindingLive),
+    Effect.provide(
+      Layer.mergeAll(
+        Cloudflare.QueueBindingLive,
+        Cloudflare.R2BucketBindingLive,
+      ),
+    ),
   ),
 );
 ```
@@ -124,9 +129,13 @@ alongside the other binding lives.
 
 ```diff lang="typescript"
   }).pipe(
-+   Effect.provide(Cloudflare.QueueEventSourceLive),
-    Effect.provide(Cloudflare.QueueBindingLive),
-    Effect.provide(Cloudflare.R2BucketBindingLive),
+    Effect.provide(
+      Layer.mergeAll(
++       Cloudflare.QueueEventSourceLive,
+        Cloudflare.QueueBindingLive,
+        Cloudflare.R2BucketBindingLive,
+      ),
+    ),
   ),
 ```
 
