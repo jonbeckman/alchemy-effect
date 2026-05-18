@@ -286,8 +286,10 @@ export const makeBranchProvider = <R extends ResourceLike>(opts: {
           const observedBranchName = output?.name ?? desiredBranchName;
           const parentBranchName = resolveParent(news.parentBranch);
 
-          // If parentBranch is a Branch resource, wait for it to be ready
-          // before we touch the child branch.
+          // If parentBranch is a plain string (an unmanaged branch reference),
+          // wait for it to be ready before we touch the child branch. When it
+          // is a Branch resource, Alchemy's resource graph already guarantees
+          // readiness before this resource's inputs are resolved.
           if (news.parentBranch && typeof news.parentBranch === "string") {
             yield* waitForBranchReady(
               organization,
