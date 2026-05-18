@@ -178,7 +178,7 @@ const withTemporaryPostgresRole = <A, E, R>(
         inherited_roles: ["postgres"],
       });
 
-      const password = toRedacted(created.password!);
+      const password = created.password!;
       const value = Redacted.value(password);
       const connectionUrl = yield* Effect.sync(
         () =>
@@ -240,9 +240,6 @@ const toMigrationError = (cause: unknown) =>
     message: cause instanceof Error ? cause.message : String(cause),
     cause,
   });
-
-const toRedacted = (value: string | Redacted.Redacted<string>) =>
-  Redacted.make(typeof value === "string" ? value : Redacted.value(value));
 
 const quotePgIdentifier = (identifier: string) =>
   `"${identifier.replaceAll('"', '""')}"`;

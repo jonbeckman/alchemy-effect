@@ -180,7 +180,7 @@ const withTemporaryMySQLPassword = <A, E, R>(
         id: created.id,
         host: created.access_host_url,
         username: created.username,
-        password: toRedacted(created.plain_text),
+        password: created.plain_text,
       };
     }),
     use,
@@ -245,9 +245,6 @@ const toMigrationError = (cause: unknown) =>
     message: cause instanceof Error ? cause.message : String(cause),
     cause,
   });
-
-const toRedacted = (value: string | Redacted.Redacted<string>) =>
-  Redacted.make(typeof value === "string" ? value : Redacted.value(value));
 
 const quoteMySQLIdentifier = (identifier: string) =>
   `\`${identifier.replaceAll("`", "``")}\``;

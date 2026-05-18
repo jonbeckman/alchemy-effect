@@ -177,11 +177,6 @@ const normalizeCidrs = (
 ): readonly string[] | undefined =>
   cidrs == null || cidrs.length === 0 ? undefined : cidrs;
 
-// `plain_text` is `string | Redacted<string>` on create/renew responses.
-// Coerce to `Redacted`, preserving redaction if the SDK already gave us one.
-const toRedacted = (value: string | Redacted.Redacted<string>) =>
-  Redacted.make(typeof value === "string" ? value : Redacted.value(value));
-
 const buildAttributes = (
   password: {
     id: string;
@@ -346,7 +341,7 @@ export const MySQLPasswordProvider = () =>
               ttl: news.ttl,
               cidrs: news.cidrs,
             });
-            plaintext = toRedacted(created.plain_text);
+            plaintext = created.plain_text;
             live = created;
           }
 

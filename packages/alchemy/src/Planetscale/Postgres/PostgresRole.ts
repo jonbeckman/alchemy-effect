@@ -415,11 +415,7 @@ export const PostgresRoleProvider = () =>
                 `Planetscale did not return a password for Role "${desiredName}".`,
               );
             }
-            plaintext = Redacted.make(
-              Redacted.isRedacted(created.password)
-                ? Redacted.value(created.password)
-                : created.password,
-            );
+            plaintext = created.password;
             live = created;
           }
 
