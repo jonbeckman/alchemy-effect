@@ -177,8 +177,8 @@ const normalizeCidrs = (
 ): readonly string[] | undefined =>
   cidrs == null || cidrs.length === 0 ? undefined : cidrs;
 
-// `plain_text` is `string | Redacted<string> | null`. Coerce to `Redacted`,
-// preserving redaction if the SDK already gave us one.
+// `plain_text` is `string | Redacted<string>` on create/renew responses.
+// Coerce to `Redacted`, preserving redaction if the SDK already gave us one.
 const toRedacted = (value: string | Redacted.Redacted<string>) =>
   Redacted.make(typeof value === "string" ? value : Redacted.value(value));
 
@@ -346,11 +346,6 @@ export const MySQLPasswordProvider = () =>
               ttl: news.ttl,
               cidrs: news.cidrs,
             });
-            if (created.plain_text == null) {
-              return yield* Effect.die(
-                "Planetscale createPassword response did not include plain_text. The password cannot be recovered.",
-              );
-            }
             plaintext = toRedacted(created.plain_text);
             live = created;
           }

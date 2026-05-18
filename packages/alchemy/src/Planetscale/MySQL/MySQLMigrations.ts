@@ -177,7 +177,7 @@ const withTemporaryMySQLPassword = <A, E, R>(
         id: created.id,
         host: created.access_host_url,
         username: created.username,
-        password: toRedacted(created.plain_text!),
+        password: toRedacted(created.plain_text),
       };
     }),
     use,
