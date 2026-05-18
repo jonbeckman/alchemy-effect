@@ -2,8 +2,11 @@ import * as ops from "@distilled.cloud/planetscale/Operations";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
+import * as Schedule from "effect/Schedule";
 import { createConnection, type Connection } from "mysql2/promise";
 import { listSqlFiles, readSqlFile, type SqlFile } from "../../Sql/SqlFile.ts";
+
+const MIGRATION_PASSWORD_TTL_SECONDS = 600;
 
 export class MySQLMigrationError extends Data.TaggedError(
   "Planetscale::MySQLMigrationError",
@@ -170,7 +173,7 @@ const withTemporaryMySQLPassword = <A, E, R>(
         database: target.database,
         branch: target.branch,
         role: "admin",
-        ttl: 3600,
+        ttl: MIGRATION_PASSWORD_TTL_SECONDS,
       });
 
       return {
@@ -189,7 +192,27 @@ const withTemporaryMySQLPassword = <A, E, R>(
           branch: target.branch,
           id: password.id,
         })
-        .pipe(Effect.catch(() => Effect.void)),
+        .pipe(
+          // Already-deleted passwords are a success: nothing to clean up.
+          Effect.catchTag("NotFound", () => Effect.void),
+          Effect.retry({
+            schedule: Schedule.exponential("500 millis").pipe(
+              Schedule.both(Schedule.recurs(5)),
+            ),
+          }),
+          // Migrations succeeded; don't fail the parent over a release-step
+          // hiccup. The password's TTL bounds the orphan window; log loudly
+          // so an operator can clean it up manually if needed.
+          Effect.catch((cause: unknown) =>
+            Effect.logWarning(
+              `Failed to delete temporary Planetscale migration password after retries. ` +
+                `It will expire via TTL (~${MIGRATION_PASSWORD_TTL_SECONDS}s). ` +
+                `organization=${target.organization} database=${target.database} ` +
+                `branch=${target.branch} id=${password.id}`,
+              cause,
+            ),
+          ),
+        ),
   );
 
 const mysqlQuery = (connection: Connection, sql: string) =>

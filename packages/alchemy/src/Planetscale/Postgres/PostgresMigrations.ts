@@ -2,8 +2,11 @@ import * as ops from "@distilled.cloud/planetscale/Operations";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
+import * as Schedule from "effect/Schedule";
 import { Client } from "pg";
 import { listSqlFiles, readSqlFile, type SqlFile } from "../../Sql/SqlFile.ts";
+
+const MIGRATION_ROLE_TTL_SECONDS = 600;
 
 export class PostgresMigrationError extends Data.TaggedError(
   "Planetscale::PostgresMigrationError",
@@ -171,7 +174,7 @@ const withTemporaryPostgresRole = <A, E, R>(
         organization: target.organization,
         database: target.database,
         branch: target.branch,
-        ttl: 3600,
+        ttl: MIGRATION_ROLE_TTL_SECONDS,
         inherited_roles: ["postgres"],
       });
 
@@ -196,7 +199,27 @@ const withTemporaryPostgresRole = <A, E, R>(
           id: role.id,
           successor: "postgres",
         })
-        .pipe(Effect.catch(() => Effect.void)),
+        .pipe(
+          // Already-deleted roles are a success: nothing to clean up.
+          Effect.catchTag("NotFound", () => Effect.void),
+          Effect.retry({
+            schedule: Schedule.exponential("500 millis").pipe(
+              Schedule.both(Schedule.recurs(5)),
+            ),
+          }),
+          // Migrations succeeded; don't fail the parent over a release-step
+          // hiccup. The role's TTL bounds the orphan window; log loudly so
+          // an operator can clean it up manually if needed.
+          Effect.catch((cause: unknown) =>
+            Effect.logWarning(
+              `Failed to delete temporary Planetscale migration role after retries. ` +
+                `It will expire via TTL (~${MIGRATION_ROLE_TTL_SECONDS}s). ` +
+                `organization=${target.organization} database=${target.database} ` +
+                `branch=${target.branch} id=${role.id}`,
+              cause,
+            ),
+          ),
+        ),
   );
 
 const pgExec = (client: Client, sql: string, values?: ReadonlyArray<unknown>) =>
