@@ -1,7 +1,7 @@
 import * as ops from "@distilled.cloud/planetscale/Operations";
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import type { ScopedPlanStatusSession } from "../Cli/Cli.ts";
 
@@ -66,8 +66,9 @@ export const pollUntil = <A, E, R>(
  * the final branch shape. `NotFound` during polling is treated as
  * not-yet-ready (the branch is being provisioned by an upstream operation).
  *
- * If a `session` is supplied, each poll emits a "Waiting for branch ... (N)"
- * note so the CLI surfaces progress while we sit in the spaced retry loop.
+ * If a `session` is supplied, each poll emits a note with elapsed seconds and
+ * expectation-setting so the CLI surfaces progress while we sit in the spaced
+ * retry loop.
  */
 export const waitForBranchReady = Effect.fn(function* (
   organization: string,
@@ -75,16 +76,15 @@ export const waitForBranchReady = Effect.fn(function* (
   branch: string,
   session?: ScopedPlanStatusSession,
 ) {
-  const attempts = yield* Ref.make(0);
+  const startedAt = yield* Clock.currentTimeMillis;
   return yield* pollUntil(
     `branch "${branch}" ready`,
     Effect.gen(function* () {
       if (session) {
-        const n = yield* Ref.updateAndGet(attempts, (i) => i + 1);
+        const now = yield* Clock.currentTimeMillis;
+        const seconds = Math.floor((now - startedAt) / 1000);
         yield* session.note(
-          n === 1
-            ? "Waiting for branch to be ready..."
-            : `Waiting for branch to be ready... (${n})`,
+          `Waiting for branch to be ready... (${seconds} seconds elapsed; this can take a few minutes)`,
         );
       }
       return yield* ops.getBranch({ organization, database, branch });
@@ -104,24 +104,24 @@ export const waitForBranchReady = Effect.fn(function* (
  * `NotFound` during polling is treated as not-yet-ready (the database is
  * being provisioned by an upstream operation).
  *
- * If a `session` is supplied, each poll emits a "Waiting for database ... (N)"
- * note so the CLI surfaces progress while we sit in the spaced retry loop.
+ * If a `session` is supplied, each poll emits a note with elapsed seconds and
+ * expectation-setting so the CLI surfaces progress while we sit in the spaced
+ * retry loop.
  */
 export const waitForDatabaseReady = Effect.fn(function* (
   organization: string,
   database: string,
   session?: ScopedPlanStatusSession,
 ) {
-  const attempts = yield* Ref.make(0);
+  const startedAt = yield* Clock.currentTimeMillis;
   return yield* pollUntil(
     `database "${database}" ready`,
     Effect.gen(function* () {
       if (session) {
-        const n = yield* Ref.updateAndGet(attempts, (i) => i + 1);
+        const now = yield* Clock.currentTimeMillis;
+        const seconds = Math.floor((now - startedAt) / 1000);
         yield* session.note(
-          n === 1
-            ? "Waiting for database to be ready..."
-            : `Waiting for database to be ready... (${n})`,
+          `Waiting for database to be ready... (${seconds} seconds elapsed; this can take a few minutes)`,
         );
       }
       return yield* ops.getDatabase({ organization, database });
