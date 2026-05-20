@@ -1,6 +1,6 @@
 import type * as cf from "@cloudflare/workers-types";
-
 import * as Cause from "effect/Cause";
+import * as Console from "effect/Console";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -21,9 +21,14 @@ import * as Socket from "effect/unstable/socket/Socket";
 import type { HttpEffect } from "../../Http.ts";
 import { isYieldableEffect } from "../../Util/effect.ts";
 import { fromCloudflareFetcher } from "../Fetcher.ts";
+import type { DurableObjectShape } from "./DurableObjectNamespace.ts";
 import { makeRequestEffect } from "./HttpServer.ts";
 import type { ExtractRpcShape, RpcPromiseShape } from "./InferEnv.ts";
 import { fromWebSocket } from "./WebSocket.ts";
+import {
+  WorkflowEvent as WorkflowEventService,
+  WorkflowStep,
+} from "./Workflow.ts";
 
 export const StreamTag = "~alchemy/rpc/stream";
 export const ErrorTag = "~alchemy/rpc/error";
@@ -477,8 +482,8 @@ export const makeWorkerBridge = (
     env: unknown,
   ) => { fetch?(request: cf.Request): Promise<cf.Response> | cf.Response },
   ExportedHandlerMethods: ReadonlyArray<string>,
-  getDefault: () => Promise<Record<string, any>>,
-  getRpc: () => Promise<Record<string, any>>,
+  getDefault: () => Effect.Effect<Record<string, any>>,
+  getRpc: () => Effect.Effect<Record<string, any>>,
 ) => {
   class WorkerBridge extends WorkerEntrypoint {
     constructor(ctx: unknown, env: unknown) {
@@ -500,14 +505,32 @@ export const makeWorkerBridge = (
       // etc.) follows the plain-export signature `(input, env, context)`, so
       // prefer explicit handler args when Cloudflare provides them and fall
       // back to the WorkerEntrypoint instance fields.
+      console.log("ExportedHandlerMethods", ExportedHandlerMethods);
       for (const method of ExportedHandlerMethods) {
         (this as any)[method] = async (
           input: unknown,
           envArg?: unknown,
           ctxArg?: unknown,
         ) => {
-          const def = await getDefault();
-          return def?.[method]?.(input, envArg ?? self.env, ctxArg ?? self.ctx);
+          console.log("getDefault.toString()", getDefault.toString());
+          return getDefault().pipe(
+            Effect.tap((def) => Console.log("def", def[method]?.toString())),
+            Effect.flatMap((def) => {
+              console.log("def[method]", def[method]);
+              const eff = def[method](
+                input,
+                envArg ?? self.env,
+                ctxArg ?? self.ctx,
+              );
+
+              console.log("eff", eff);
+              return eff;
+            }),
+            Effect.tap((result) => Console.log("result", result)),
+            Effect.tapError((err) => Console.log("err", err)),
+            Effect.tapCause((cause) => Console.log("cause", cause)),
+            Effect.runPromise,
+          );
         };
       }
 
@@ -603,12 +626,6 @@ export const makeWorkflowBridge =
         );
       }
     };
-
-import type { DurableObjectShape } from "./DurableObjectNamespace.ts";
-import {
-  WorkflowEvent as WorkflowEventService,
-  WorkflowStep,
-} from "./Workflow.ts";
 
 const wrapWorkflowEvent = (
   event: any,

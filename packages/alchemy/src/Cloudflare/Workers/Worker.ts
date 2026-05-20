@@ -963,19 +963,19 @@ export const Worker: Platform<
           const scope = Scope.makeUnsafe();
           return eff
             .pipe(
-              Effect.provideContext(services),
-              Scope.provide(scope),
-              Effect.provide(Layer.succeed(WorkerExecutionContext, context)),
-              Effect.provide(
+              // Scope.provide(scope),
+              Effect.provide([
+                Layer.succeedContext(services),
+                Layer.succeed(WorkerExecutionContext, context),
                 Layer.succeed(ExecutionContext, { scope, cache: {} }),
-              ),
+              ]),
               Effect.runPromiseExit,
             )
-            .finally(() =>
-              context.waitUntil(
-                Effect.runPromise(Scope.close(scope, Exit.void)),
-              ),
-            );
+            .finally(() => {
+              // context.waitUntil(
+              //   Effect.runPromise(Scope.close(scope, Exit.void)),
+              // );
+            });
         };
 
         const handle =
@@ -988,13 +988,16 @@ export const Worker: Platform<
               env,
               context,
             };
+            console.log("handlers", handlers);
             for (const handler of handlers) {
               const eff = handler(event);
+              console.log("outer eff", eff);
               if (Effect.isEffect(eff)) {
                 return runUserEffect(
                   eff as Effect.Effect<unknown, unknown>,
                   context,
                 ).then((exit) => {
+                  console.log("exit", exit);
                   if (exit._tag === "Success") return exit.value;
                   throw Cause.squash(exit.cause);
                 });

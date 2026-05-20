@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { MinimumLogLevel } from "effect/References";
 import * as Schedule from "effect/Schedule";
+import * as Stream from "effect/Stream";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
@@ -40,54 +41,97 @@ const clientLayer = (url: string) =>
   );
 
 test(
-  "RpcServer.toHttpEffect: warmup ping",
+  "RpcServer.toHttpEffect: unary RPC response",
   Effect.gen(function* () {
     const { url } = yield* stack;
     console.log("url:", url);
 
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const client = yield* RpcClient.make(PingRpcs);
-        const result = yield* client.Ping({ message: "hello" }).pipe(
-          Effect.tapError(Console.log),
-          Effect.retry({
-            schedule: Schedule.exponential("500 millis"),
-            times: 5,
-          }),
-        );
-        expect(result.echo).toBe("hello");
-        expect(result.n).toBeGreaterThan(0);
-      }),
-    ).pipe(Effect.provide(clientLayer(url)));
+    yield* Effect.gen(function* () {
+      const client = yield* RpcClient.make(PingRpcs);
+      const result = yield* client.Ping({ message: "hello" }).pipe(
+        Effect.tapError(Console.log),
+        Effect.retry({
+          schedule: Schedule.exponential("500 millis"),
+          times: 5,
+        }),
+      );
+      expect(result.echo).toBe("hello");
+      expect(result.n).toBeGreaterThan(0);
+    }).pipe(Effect.scoped, Effect.provide(clientLayer(url)));
   }).pipe(logLevel),
   { timeout: 30_000 },
 );
 
 test(
-  "RpcServer.toHttpEffect: 200 concurrent calls do not hang",
+  "RpcServer.toHttpEffect: streaming RPC response",
   Effect.gen(function* () {
     const { url } = yield* stack;
 
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const client = yield* RpcClient.make(PingRpcs);
+    yield* Effect.gen(function* () {
+      const client = yield* RpcClient.make(PingRpcs);
+      const values = yield* client.Count({ upto: 5 }).pipe(
+        Stream.runCollect,
+        Effect.retry({
+          schedule: Schedule.exponential("500 millis"),
+          times: 5,
+        }),
+      );
+      expect(values).toEqual([1, 2, 3, 4, 5]);
+    }).pipe(Effect.scoped, Effect.provide(clientLayer(url)));
+  }).pipe(logLevel),
+  { timeout: 30_000 },
+);
 
-        const N = 200;
-        const results = yield* Effect.forEach(
-          Array.from({ length: N }, (_, i) => i),
-          (i) =>
-            client
-              .Ping({ message: `m-${i}` })
-              .pipe(Effect.timeout("5 seconds")),
-          { concurrency: 64 },
+test(
+  "RpcServer.toHttpEffect: 200 concurrent unary calls do not hang",
+  Effect.gen(function* () {
+    const { url } = yield* stack;
+
+    yield* Effect.gen(function* () {
+      const client = yield* RpcClient.make(PingRpcs);
+
+      const N = 200;
+      const results = yield* Effect.forEach(
+        Array.from({ length: N }, (_, i) => i),
+        (i) =>
+          client.Ping({ message: `m-${i}` }).pipe(Effect.timeout("5 seconds")),
+        { concurrency: 64 },
+      );
+
+      expect(results).toHaveLength(N);
+      for (let i = 0; i < N; i++) {
+        expect(results[i].echo).toBe(`m-${i}`);
+      }
+    }).pipe(Effect.scoped, Effect.provide(clientLayer(url)));
+  }).pipe(logLevel),
+  { timeout: 30_000 },
+);
+
+test(
+  "RpcServer.toHttpEffect: concurrent streaming calls do not hang",
+  Effect.gen(function* () {
+    const { url } = yield* stack;
+
+    yield* Effect.gen(function* () {
+      const client = yield* RpcClient.make(PingRpcs);
+
+      const N = 64;
+      const results = yield* Effect.forEach(
+        Array.from({ length: N }, (_, i) => i),
+        (i) =>
+          client
+            .Count({ upto: 3 + (i % 3) })
+            .pipe(Stream.runCollect, Effect.timeout("5 seconds")),
+        { concurrency: N },
+      );
+
+      expect(results).toHaveLength(N);
+      for (let i = 0; i < N; i++) {
+        expect(results[i]).toEqual(
+          Array.from({ length: 3 + (i % 3) }, (_, n) => n + 1),
         );
-
-        expect(results).toHaveLength(N);
-        for (let i = 0; i < N; i++) {
-          expect(results[i].echo).toBe(`m-${i}`);
-        }
-      }),
-    ).pipe(Effect.provide(clientLayer(url)));
+      }
+    }).pipe(Effect.scoped, Effect.provide(clientLayer(url)));
   }).pipe(logLevel),
   { timeout: 30_000 },
 );
@@ -97,21 +141,19 @@ test(
   Effect.gen(function* () {
     const { url } = yield* stack;
 
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const client = yield* RpcClient.make(PingRpcs);
+    yield* Effect.gen(function* () {
+      const client = yield* RpcClient.make(PingRpcs);
 
-        const N = 64;
-        const results = yield* Effect.forEach(
-          Array.from({ length: N }, (_, i) => i),
-          () => client.Slow({ ms: 250 }).pipe(Effect.timeout("5 seconds")),
-          { concurrency: N },
-        );
+      const N = 64;
+      const results = yield* Effect.forEach(
+        Array.from({ length: N }, (_, i) => i),
+        () => client.Slow({ ms: 250 }).pipe(Effect.timeout("5 seconds")),
+        { concurrency: N },
+      );
 
-        expect(results).toHaveLength(N);
-        for (const r of results) expect(r.slept).toBe(250);
-      }),
-    ).pipe(Effect.provide(clientLayer(url)));
+      expect(results).toHaveLength(N);
+      for (const r of results) expect(r.slept).toBe(250);
+    }).pipe(Effect.scoped, Effect.provide(clientLayer(url)));
   }).pipe(logLevel),
   { timeout: 30_000 },
 );

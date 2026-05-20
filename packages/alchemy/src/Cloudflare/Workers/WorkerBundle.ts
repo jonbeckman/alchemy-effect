@@ -211,18 +211,15 @@ const exportsEffect = tag.pipe(
   Effect.scoped,
 );
 
-// TODO(sam): we could kick this off during module init, but any I/O will break deploy
-// let exportsPromise = Effect.runPromise(exportsEffect);
-
 // for now, we delay initializing the worker until the first request
 let exportsPromise;
 
 // don't initialize the workerEffect during module init because Cloudflare does not allow I/O during module init
 // we cache it synchronously (??=) to guarnatee only one initialization ever happens
-const getExports = () => (exportsPromise ??= Effect.runPromise(exportsEffect))
-const getExport = (name) => getExports().then(exports => exports[name]?.make)
-const getDefault = () => getExports().then(exports => exports.default)
-const getRpc = () => getExports().then(exports => exports.__rpc__ ?? {})
+const getExports = () => exportsEffect
+const getExport = (name) => getExports().pipe(Effect.map(exports => exports[name]?.make))
+const getDefault = () => getExports().pipe(Effect.map(exports => exports.default))
+const getRpc = () => getExports().pipe(Effect.map(exports => exports.__rpc__ ?? {}))
 
 // Bridge the user's default-export shape onto a real \`WorkerEntrypoint\`
 // subclass so Cloudflare service bindings can dispatch both the standard
