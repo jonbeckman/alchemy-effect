@@ -588,8 +588,15 @@ returns the same `Worker` resource — but `props.schema` lets a second
 Worker bind a typed client without re-importing `RpcClient`:
 
 ```typescript
-const tasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
-const task = yield* tasks.getTask({ id: "abc" });
+// INIT: register the binding once
+const makeTasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
+
+// PER-REQUEST: fresh client per call
+proxyGetTask: ({ id }) =>
+  Effect.gen(function* () {
+    const tasks = yield* makeTasks;
+    return yield* tasks.getTask({ id });
+  }),
 ```
 
 The bind goes over the in-account service binding (not the public

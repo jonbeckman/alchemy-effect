@@ -1,6 +1,6 @@
 ---
 title: Define an RPC Worker
-description: Replace the `Cloudflare.Worker` + `RpcServer.toHttpEffect` boilerplate with `Cloudflare.RpcWorker` — declare the schema in props, return the piped Effect directly, and bind a typed client from another Worker.
+description: Define a typed Effect RPC group, serve it from `Cloudflare.RpcWorker`, drive it from an integration test, and (later) bind a typed client from another Worker.
 sidebar:
   order: 11
 ---
@@ -10,6 +10,11 @@ The [Effect RPC guide](/guides/effect-rpc) walks through the long-form
 into `RpcServer.toHttpEffect`, return `{ fetch }`. Most of that is
 identical for every RPC Worker. `Cloudflare.RpcWorker` takes the
 `RpcGroup` directly in props and wraps the `{ fetch }` shape for you.
+
+This tutorial walks through a single RPC Worker end-to-end: declare
+the schema, implement the worker, deploy it, and drive it from an
+integration test. Cross-Worker binding via `RpcWorker.bind` shows up
+at the end as a follow-on.
 
 ## Declare a tagged error
 
@@ -80,7 +85,7 @@ export default class Worker extends Cloudflare.RpcWorker<Worker>()(
 
 `Cloudflare.RpcWorker<Self>()(...)` is class-shaped just like
 `Cloudflare.Worker<Self>()(...)`. The only new prop is `schema`,
-which carries the `RpcGroup`. The init body is a placeholder for now.
+which carries the `RpcGroup`.
 
 ## Wire the handlers
 
@@ -129,9 +134,7 @@ and return type.
 ```
 
 The init returns the **piped `RpcServer.toHttpEffect` Effect
-directly** — no `{ fetch }` wrapper. Use `RpcSerialization.layerNdjson`
-instead of `layerJson` if any procedure in the group is a streaming
-RPC; newline framing is required on the wire.
+directly** — no `{ fetch }` wrapper.
 
 ## Deploy the Worker
 
@@ -147,101 +150,153 @@ export default Alchemy.Stack(
   { providers: Cloudflare.providers(), state: Cloudflare.state() },
   Effect.gen(function* () {
     const worker = yield* Worker;
-    return worker.url;
+    return { url: worker.url.as<string>() };
   }),
 );
 ```
 
-Yielding the class returns the underlying `Worker` resource, so
-`worker.url` / `worker.workerName` work the same as a plain
-`Cloudflare.Worker`.
+Yielding the class returns the underlying `Worker` resource;
+`worker.url` is the public `workers.dev` URL the test will hit.
 
-## Bind it from another Worker
+## Drive it from a test
 
-```diff lang="typescript"
- // src/caller.ts
- import * as Cloudflare from "alchemy/Cloudflare";
- import * as Effect from "effect/Effect";
-+import TaskWorker from "./worker.ts";
-
- export default class Caller extends Cloudflare.RpcWorker<Caller>()(
-   "Caller",
-   { main: import.meta.filename, schema: CallerRpcs },
-   Effect.gen(function* () {
-+    const tasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
-   }),
- ) {}
-```
-
-`Cloudflare.RpcWorker.bind(WorkerClass)` mirrors `R2Bucket.bind` /
-`KVNamespace.bind` — it auto-registers the service binding on the
-surrounding Worker and returns a typed `RpcClient` for the bound
-schema.
-
-## Call the bound worker from a handler
-
-```diff lang="typescript"
- export default class Caller extends Cloudflare.RpcWorker<Caller>()(
-   "Caller",
-   { main: import.meta.filename, schema: CallerRpcs },
-   Effect.gen(function* () {
-     const tasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
-+    const handlers = CallerRpcs.toLayer({
-+      proxyGetTask: ({ id }) => tasks.getTask({ id }),
-+    });
-   }),
- ) {}
-```
-
-`tasks.getTask({ id })` is fully typed against `TaskWorker`'s
-schema — success type `string`, error channel includes `TaskNotFound`.
-The call goes over the in-account service binding, not the public
-internet.
-
-:::caution[Build a fresh client per request]
-`yield* Cloudflare.RpcWorker.bind(...)` runs **inside the per-request
-init**, not the outer Layer init. Cloudflare rejects I/O objects
-created on a previous request — caching the client across requests
-fails with `"Cannot perform I/O on behalf of a different request"`.
-:::
-
-## Call it from a script
+Create the test fixture stack and let `Test.make` deploy it once for
+the file. The same `TaskRpcs` value drives a fully typed client over
+HTTP — the test asserts on `client.getTask({...})` directly, with
+schema decoding and tagged errors built in.
 
 ```typescript
+// test/worker.test.ts
+import { expect } from "@effect/vitest";
+import * as Cloudflare from "alchemy/Cloudflare";
+import * as Test from "alchemy/Test/Vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
-import { TaskRpcs } from "./src/rpcs.ts";
+import * as RpcClient from "effect/unstable/rpc/RpcClient";
+import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
+import Stack from "../alchemy.run.ts";
+import { TaskRpcs } from "../src/rpcs.ts";
 
-const program = Effect.gen(function* () {
-  const client = yield* RpcClient.make(TaskRpcs);
-  return yield* client.getTask({ id: "abc" });
+const { test, beforeAll, afterAll, deploy, destroy } = Test.make({
+  providers: Cloudflare.providers(),
 });
 
-Effect.runPromise(
-  program.pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        RpcClient.layerProtocolHttp({ url: process.env.URL! }),
-        RpcSerialization.layerJson,
-        FetchHttpClient.layer,
-      ),
+const stack = beforeAll(deploy(Stack));
+afterAll.skipIf(!!process.env.NO_DESTROY)(destroy(Stack));
+
+const clientLayer = (url: string) =>
+  RpcClient.layerProtocolHttp({ url }).pipe(
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(
+      Layer.succeed(RpcSerialization.RpcSerialization, RpcSerialization.json),
     ),
-  ),
+  );
+
+test(
+  "getTask round-trip",
+  Effect.gen(function* () {
+    const { url } = yield* stack;
+    yield* Effect.gen(function* () {
+      const client = yield* RpcClient.make(TaskRpcs);
+      const result = yield* client
+        .getTask({ id: "abc" })
+        .pipe(
+          Effect.retry({
+            schedule: Schedule.exponential("500 millis"),
+            times: 5,
+          }),
+        );
+      expect(result).toBe("task-abc");
+    }).pipe(Effect.scoped, Effect.provide(clientLayer(url)));
+  }),
+  { timeout: 60_000 },
 );
 ```
 
-The same `TaskRpcs` value drives a fully typed client outside any
-Worker — useful for tests, CLIs, or migration scripts.
+Three things are happening:
+
+- `Test.make({ providers: Cloudflare.providers() })` gives you
+  `test`/`beforeAll`/`afterAll`/`deploy`/`destroy` bound to a real
+  Cloudflare deployment.
+- `beforeAll(deploy(Stack))` deploys the stack once and returns a
+  handle each test `yield*`s for the outputs.
+- `Effect.retry({ schedule: Schedule.exponential("500 millis"), times: 5 })`
+  rides through the seconds it takes a fresh `workers.dev` URL to
+  start serving 200s.
+
+## Streaming procedures
+
+If any procedure in the group is a streaming RPC, switch the wire
+codec from `layerJson` to `layerNdjson` (newline framing is required):
+
+```diff lang="typescript"
+-      Effect.provide(Layer.mergeAll(handlers, RpcSerialization.layerJson)),
++      Effect.provide(Layer.mergeAll(handlers, RpcSerialization.layerNdjson)),
+```
+
+Use the matching serialization layer in your test client.
+
+## Bonus: call it from another Worker
+
+Once the single-worker flow is solid, a second `RpcWorker` can call
+the first via `Cloudflare.RpcWorker.bind`:
+
+```typescript
+// src/caller.ts
+import * as Cloudflare from "alchemy/Cloudflare";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { CallerRpcs } from "./caller-rpcs.ts";
+import TaskWorker from "./worker.ts";
+
+export default class Caller extends Cloudflare.RpcWorker<Caller>()(
+  "Caller",
+  { main: import.meta.filename, schema: CallerRpcs },
+  Effect.gen(function* () {
+    // INIT: register the binding once
+    const makeTasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
+
+    const handlers = CallerRpcs.toLayer({
+      // PER-REQUEST: build a fresh client per call
+      proxyGetTask: ({ id }) =>
+        Effect.gen(function* () {
+          const tasks = yield* makeTasks;
+          return yield* tasks.getTask({ id });
+        }),
+    });
+    return RpcServer.toHttpEffect(CallerRpcs).pipe(
+      Effect.provide(Layer.mergeAll(handlers, RpcSerialization.layerJson)),
+    );
+  }),
+) {}
+```
+
+`Cloudflare.RpcWorker.bind(WorkerClass)` runs at **init**, registers
+the service binding on the surrounding Worker, and returns an
+`Effect<RpcClient>` *factory*. Each per-request handler yields the
+factory to build a fresh client.
+
+:::caution[Why a factory and not the client?]
+Cloudflare rejects I/O objects (the service-binding `stub.fetch`
+body) created on a previous request. Caching one `RpcClient` across
+requests fails with `"Cannot perform I/O on behalf of a different
+request"` — so each handler yields the factory to build a fresh
+client.
+:::
 
 ## Recap
 
 - `Cloudflare.RpcWorker` keeps everything from
-  [Effect RPC](/guides/effect-rpc) — same schema, same handlers,
-  same client — and removes the `{ fetch }` wrapper.
-- `props.schema` declares the served `RpcGroup`; the init returns the
-  piped `RpcServer.toHttpEffect(schema)` Effect directly.
-- `Cloudflare.RpcWorker.bind(WorkerClass)` returns a typed RPC client
-  scoped to the current request that travels over the service
-  binding.
+  [Effect RPC](/guides/effect-rpc) and removes the `{ fetch }`
+  wrapper. `props.schema` declares the served `RpcGroup`; the init
+  returns the piped `RpcServer.toHttpEffect(schema)` Effect directly.
+- A single `Test.make` + `beforeAll(deploy(Stack))` + typed
+  `RpcClient.make(TaskRpcs)` gets you an integration test that
+  hammers a real `workers.dev` URL.
+- For streaming procedures, switch `layerJson` → `layerNdjson` on
+  both ends.
+- `Cloudflare.RpcWorker.bind(WorkerClass)` is the cross-Worker
+  factory: register at init, build fresh clients per request.

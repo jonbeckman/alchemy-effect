@@ -96,24 +96,42 @@ export interface RpcWorkerClass extends Effect.Effect<
   /**
    * Bind a typed Effect rpc client to a worker resource, using the
    * worker's declared rpc {@link RpcGroup.RpcGroup} schema. Mirrors
-   * `Cloudflare.R2Bucket.bind(MyBucket)` and friends — but the
-   * returned value is the rpc client itself, so `client.someRpc(...)`
-   * calls go straight through to the bound worker's `fetch`.
+   * `Cloudflare.R2Bucket.bind(MyBucket)` and friends.
+   *
+   * Two-step contract:
+   *
+   * 1. Yield once at **init** to register the service binding on the
+   *    surrounding worker. The yield resolves to an
+   *    `Effect<RpcClient>` *factory*.
+   * 2. Yield the factory inside each per-request handler to build a
+   *    fresh `RpcClient`. A fresh client is required because Cloudflare
+   *    rejects I/O objects (the service-binding `stub.fetch` body)
+   *    created on a previous request.
    *
    * Pair with {@link RpcWorker} on the server side; both ends share
    * the same schema so values round-trip through one `Schema` codec.
    *
    * @example
    * ```ts
-   * // Inside another worker's init
-   * const tasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
-   * const task = yield* tasks.getTask({ id: "abc" });
+   * // INIT: register the binding once
+   * const makeTasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
+   *
+   * // PER-REQUEST: build a fresh client and call through
+   * proxyGetTask: ({ id }) =>
+   *   Effect.gen(function* () {
+   *     const tasks = yield* makeTasks;
+   *     return yield* tasks.getTask({ id });
+   *   }),
    * ```
    */
   readonly bind: <Self, Rpcs extends Rpc.Any>(
     workerEff: RpcWorkerYieldable<Self, Rpcs>,
   ) => Effect.Effect<
-    RpcClient.RpcClient<Rpcs, RpcClientError.RpcClientError> & RpcShape<Self>,
+    Effect.Effect<
+      RpcClient.RpcClient<Rpcs, RpcClientError.RpcClientError> & RpcShape<Self>,
+      never,
+      never
+    >,
     never,
     Worker
   >;
@@ -201,9 +219,10 @@ export interface RpcWorkerClass extends Effect.Effect<
  * @section Binding it from another worker
  * @example `Cloudflare.RpcWorker.bind(WorkerClass)`
  * Inside another worker's init, `RpcWorker.bind(WorkerClass)`
- * auto-registers the service binding on the surrounding worker and
- * returns a typed rpc client. The client's methods are typed by the
- * bound worker's `schema`. Mirrors `Cloudflare.R2Bucket.bind(MyBucket)`.
+ * registers the service binding on the surrounding worker and returns
+ * an `Effect<RpcClient>` factory. Each per-request handler yields the
+ * factory to build a fresh client (Cloudflare rejects cross-request
+ * reuse of the underlying stub I/O).
  * ```typescript
  * import TaskWorker from "./task-worker.ts";
  *
@@ -211,9 +230,16 @@ export interface RpcWorkerClass extends Effect.Effect<
  *   "Caller",
  *   { main: import.meta.filename, schema: CallerRpcs },
  *   Effect.gen(function* () {
- *     const tasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
+ *     // INIT: register binding once
+ *     const makeTasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
+ *
  *     const handlers = CallerRpcs.toLayer({
- *       proxyGetTask: ({ id }) => tasks.getTask({ id }),
+ *       // PER-REQUEST: fresh client per call
+ *       proxyGetTask: ({ id }) =>
+ *         Effect.gen(function* () {
+ *           const tasks = yield* makeTasks;
+ *           return yield* tasks.getTask({ id });
+ *         }),
  *     });
  *     return RpcServer.toHttpEffect(CallerRpcs).pipe(
  *       Effect.provide(Layer.mergeAll(handlers, RpcSerialization.layerJson)),
@@ -263,7 +289,11 @@ export interface RpcWorkerClass extends Effect.Effect<
 const bind = <Self, Rpcs extends Rpc.Any>(
   workerEff: RpcWorkerYieldable<Self, Rpcs>,
 ): Effect.Effect<
-  RpcClient.RpcClient<Rpcs, RpcClientError.RpcClientError> & RpcShape<Self>,
+  Effect.Effect<
+    RpcClient.RpcClient<Rpcs, RpcClientError.RpcClientError> & RpcShape<Self>,
+    never,
+    never
+  >,
   never,
   Worker
 > =>
@@ -278,14 +308,27 @@ const bind = <Self, Rpcs extends Rpc.Any>(
         ),
       );
     }
-    // Yielding the class auto-binds it as a service binding on the
-    // surrounding worker (delegated to the underlying `Cloudflare.Worker`).
     const worker = (yield* workerEff) as Worker;
-    // A fresh `RpcClient` is built per call. Cloudflare workers reject
-    // I/O objects (the service-binding `stub.fetch` body) created on a
-    // previous request — any cached client breaks with "Cannot perform
-    // I/O on behalf of a different request" the moment a second request
-    // arrives. Callers `yield*` this Effect once per request.
+    // Register the service binding on the surrounding worker. Mirrors
+    // `Cloudflare.bindWorker` — yielding the class is *not* enough; we
+    // need an explicit `self.bind\`${worker}\`(...)` so workerd surfaces
+    // the stub on `env` at request time.
+    const self = yield* WorkerCtor;
+    yield* self.bind`${worker}`({
+      bindings: [
+        {
+          type: "service",
+          name: worker.LogicalId,
+          service: worker.workerName,
+        },
+      ],
+    });
+    // A fresh `RpcClient` is built per request. Cloudflare workers
+    // reject I/O objects (the service-binding `stub.fetch` body) that
+    // were created on a previous request — any cached client breaks
+    // with "Cannot perform I/O on behalf of a different request" the
+    // moment a second request arrives. Callers `yield*` the returned
+    // factory Effect once per request.
     const httpClient = HttpClient.layerMergedContext(
       Effect.map(WorkerEnvironment, (env) => {
         const stub = (env as Record<string, any>)[worker.LogicalId];
@@ -298,10 +341,15 @@ const bind = <Self, Rpcs extends Rpc.Any>(
       Layer.provide(RpcSerialization.layerNdjson),
       Layer.provide(httpClient),
     );
-    return RpcClient.make(schema).pipe(
+    const factory = RpcClient.make(schema).pipe(
       Effect.provide(protocol),
-    ) as unknown as RpcClient.RpcClient<Rpcs, RpcClientError.RpcClientError> &
-      RpcShape<Self>;
+      Effect.scoped,
+    ) as unknown as Effect.Effect<
+      RpcClient.RpcClient<Rpcs, RpcClientError.RpcClientError> & RpcShape<Self>,
+      never,
+      never
+    >;
+    return factory;
   });
 
 export const RpcWorker: RpcWorkerClass = (() => {
