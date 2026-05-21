@@ -9,51 +9,64 @@ The [Durable Objects tutorial](/tutorial/cloudflare/durable-objects)
 uses alchemy's built-in DO method bridge: any function returned from
 the inner Effect becomes a typed method on the stub. That bridge
 `JSON.stringify`s each return value, which strips class identity —
-fine for primitives and plain structs, but a problem when values
-contain `Schema.Class` instances (an `effect/ai` `Response.Usage`
-returned from a DO becomes a plain object on the consumer side).
+fine for primitives, but a problem when values contain `Schema.Class`
+instances. `Cloudflare.RpcDurableObjectNamespace` runs an Effect RPC
+server on the DO's `fetch` so both ends share one codec.
 
-`Cloudflare.RpcDurableObjectNamespace` solves this by serving an
-Effect `RpcServer.toHttpEffect(group)` on the DO's `fetch` handler.
-Both ends go through the same `RpcSerialization` codec, so
-`Schema.decode` reconstructs class instances correctly.
-
-## Define the RPC group
-
-DO-scoped groups don't need a per-session id in payloads — the DO
-instance *is* the session:
+## Declare a procedure
 
 ```typescript
 // src/rpcs.ts
 import * as Schema from "effect/Schema";
-import { Rpc, RpcGroup } from "effect/unstable/rpc";
+import { Rpc } from "effect/unstable/rpc";
 
 const setTitle = Rpc.make("setTitle", {
   payload: { title: Schema.String },
   success: Schema.Void,
 });
-
-const getTitle = Rpc.make("getTitle", {
-  payload: {},
-  success: Schema.String,
-});
-
-export class CounterRpcs extends RpcGroup.make(setTitle, getTitle) {}
 ```
 
-## Implement the Durable Object
+DO-scoped procedures don't need a per-session id in the payload — the
+DO instance *is* the session.
 
-`Cloudflare.RpcDurableObjectNamespace<Self>()(...)` mirrors
-`Cloudflare.DurableObjectNamespace<Self>()(...)` — same outer/inner
-Effect pattern. The difference is that the inner Effect returns the
-piped `RpcServer.toHttpEffect(schema)` Effect directly:
+## Add a second procedure
+
+```diff lang="typescript"
+ const setTitle = Rpc.make("setTitle", {
+   payload: { title: Schema.String },
+   success: Schema.Void,
+ });
++
++const getTitle = Rpc.make("getTitle", {
++  payload: {},
++  success: Schema.String,
++});
+```
+
+Each `Rpc.make` is independent, so adding procedures is purely
+additive.
+
+## Group them into an `RpcGroup`
+
+```diff lang="typescript"
+ import * as Schema from "effect/Schema";
+-import { Rpc } from "effect/unstable/rpc";
++import { Rpc, RpcGroup } from "effect/unstable/rpc";
+
+ // ...
+
++export class CounterRpcs extends RpcGroup.make(setTitle, getTitle) {}
+```
+
+`CounterRpcs` is the single value the DO, the consumer, and any
+tests all import.
+
+## Define the DO class
 
 ```typescript
 // src/counter.ts
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { CounterRpcs } from "./rpcs.ts";
 
 export default class Counter extends Cloudflare.RpcDurableObjectNamespace<Counter>()(
@@ -61,34 +74,77 @@ export default class Counter extends Cloudflare.RpcDurableObjectNamespace<Counte
   { schema: CounterRpcs },
   Effect.gen(function* () {
     return Effect.gen(function* () {
-      const state = yield* Cloudflare.DurableObjectState;
-      const handlers = CounterRpcs.toLayer({
-        setTitle: ({ title }) => state.storage.put("title", title),
-        getTitle: () =>
-          Effect.map(state.storage.get<string>("title"), (t) => t ?? ""),
-      });
-      return RpcServer.toHttpEffect(CounterRpcs).pipe(
-        Effect.provide(Layer.mergeAll(handlers, RpcSerialization.layerNdjson)),
-      );
+      return Effect.succeed(undefined as never);
     });
   }),
 ) {}
 ```
 
-NDJSON serialization is required if any procedure in the group is a
-streaming RPC. Use `layerJson` if every procedure is request/response.
+`Cloudflare.RpcDurableObjectNamespace<Self>()(...)` mirrors
+`Cloudflare.DurableObjectNamespace<Self>()(...)` — same outer/inner
+Effect pattern. The outer Effect resolves shared deps; the inner
+Effect runs once per DO instance.
+
+## Pull `state` out of context
+
+```diff lang="typescript"
+ Effect.gen(function* () {
+   return Effect.gen(function* () {
++    const state = yield* Cloudflare.DurableObjectState;
+-    return Effect.succeed(undefined as never);
+   });
+ }),
+```
+
+`Cloudflare.DurableObjectState` is the same per-instance handle
+Cloudflare exposes for `storage`, `setAlarm`, `acceptWebSocket`, and
+friends.
+
+## Wire the handlers
+
+```diff lang="typescript"
+ Effect.gen(function* () {
+   return Effect.gen(function* () {
+     const state = yield* Cloudflare.DurableObjectState;
++    const handlers = CounterRpcs.toLayer({
++      setTitle: ({ title }) => state.storage.put("title", title),
++      getTitle: () =>
++        Effect.map(state.storage.get<string>("title"), (t) => t ?? ""),
++    });
+   });
+ }),
+```
+
+`CounterRpcs.toLayer({...})` is type-checked against the group —
+every procedure must be implemented, with the right payload and
+return type.
+
+## Return the piped Effect
+
+```diff lang="typescript"
++import * as Layer from "effect/Layer";
++import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+
+ // ...
+     const handlers = CounterRpcs.toLayer({ /* ... */ });
++    return RpcServer.toHttpEffect(CounterRpcs).pipe(
++      Effect.provide(Layer.mergeAll(handlers, RpcSerialization.layerNdjson)),
++    );
+   });
+ }),
+```
+
+The inner Effect returns the piped `RpcServer.toHttpEffect` Effect
+directly — no `{ fetch }` wrapper. NDJSON is required if any
+procedure is a streaming RPC; use `layerJson` if every procedure is
+request/response.
 
 ## Bind the DO to a Worker
-
-Yield the class to register the binding and get the namespace value
-back — same shape as the regular `DurableObjectNamespace`:
 
 ```typescript
 // src/worker.ts
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
-import { HttpServerRequest } from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import Counter from "./counter.ts";
 
 export default class Worker extends Cloudflare.Worker<Worker>()(
@@ -97,49 +153,47 @@ export default class Worker extends Cloudflare.Worker<Worker>()(
   Effect.gen(function* () {
     const counters = yield* Counter;
     return {
-      fetch: Effect.gen(function* () {
-        const request = yield* HttpServerRequest;
-        const url = new URL(request.url);
-        const id = url.searchParams.get("id") ?? "default";
-
-        if (request.method === "POST") {
-          const { title } = (yield* request.json) as { title: string };
-          yield* counters.getByName(id).setTitle({ title });
-          return HttpServerResponse.text("ok");
-        }
-        const title = yield* counters.getByName(id).getTitle({});
-        return HttpServerResponse.text(title);
-      }),
+      fetch: Effect.succeed(undefined as never),
     };
   }),
 ) {}
 ```
 
-`counters.getByName(id)` returns a typed `RpcClient<CounterRpcs>`.
-Each procedure on the group is a typed Effect/Stream factory — no
-`RpcClient.make` setup at the call site.
+`yield* Counter` registers the binding (and class-migration metadata)
+on the surrounding Worker and hands you the namespace.
 
-## When to use this over the built-in bridge
+## Call the DO from `fetch`
 
-Use the built-in DO bridge when your method return values are
-primitives, plain structs, or `Schema.encodeUnknown`-compatible
-shapes — it's lighter and ergonomic.
+```diff lang="typescript"
++import { HttpServerRequest } from "effect/unstable/http/HttpServerRequest";
++import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
-Switch to `RpcDurableObjectNamespace` when:
+ // ...
+     return {
+-      fetch: Effect.succeed(undefined as never),
++      fetch: Effect.gen(function* () {
++        const request = yield* HttpServerRequest;
++        const id = new URL(request.url).searchParams.get("id") ?? "default";
++
++        if (request.method === "POST") {
++          const { title } = (yield* request.json) as { title: string };
++          yield* counters.getByName(id).setTitle({ title });
++          return HttpServerResponse.text("ok");
++        }
++        const title = yield* counters.getByName(id).getTitle({});
++        return HttpServerResponse.text(title);
++      }),
+     };
+```
 
-- Return values contain **`Schema.Class` instances** that downstream
-  code branches on (`instanceof`, tagged unions, etc.) — the built-in
-  bridge will silently flatten them to plain structs.
-- You want **streaming** procedures (the codec round-trips
-  `Stream.Stream`).
-- You want a **single shared schema** across multiple call-sites
-  (Worker, script, tests) — the same `RpcGroup` value drives every
-  client.
+`counters.getByName(id)` returns a typed `RpcClient<CounterRpcs>` —
+each procedure on the group is a typed Effect/Stream factory, no
+`RpcClient.make` setup at the call site. Class instances round-trip
+through the same `RpcSerialization.layerNdjson` codec, so a
+`Schema.Class` returned from `getTitle` arrives client-side as the
+real instance, not a flattened struct.
 
-## Yield the surrounding namespace from inside the DO
-
-Mirrors `yield* DurableObjectNamespace` on the regular class — useful
-for fanning a call out to sibling instances:
+## Yield the namespace from inside the DO
 
 ```typescript
 Effect.gen(function* () {
@@ -148,13 +202,30 @@ Effect.gen(function* () {
 });
 ```
 
+Mirrors `yield* DurableObjectNamespace` on the regular class — useful
+for fanning a call out to sibling instances.
+
+## When to reach for this
+
+Use the built-in DO bridge when method return values are primitives
+or `Schema.encodeUnknown`-compatible structs — it's lighter and
+ergonomic.
+
+Switch to `RpcDurableObjectNamespace` when:
+
+- Return values contain **`Schema.Class` instances** that downstream
+  code branches on — the built-in bridge will silently flatten them.
+- You want **streaming** procedures (NDJSON codec round-trips
+  `Stream.Stream`).
+- You want a **single shared schema** across multiple call-sites
+  (Worker, script, tests) — the same `RpcGroup` value drives every
+  client.
+
 ## Recap
 
-- `Cloudflare.RpcDurableObjectNamespace<Self>()(...)` mirrors the
-  regular DO class but the inner Effect returns the piped
-  `RpcServer.toHttpEffect(schema)` Effect directly.
+- `Cloudflare.RpcDurableObjectNamespace<Self>()(...)` is the regular
+  DO class with `props.schema` and an inner Effect that returns a
+  piped `RpcServer.toHttpEffect(schema)` Effect.
 - `namespace.getByName(id)` is a typed `RpcClient` over the same
   `RpcGroup` the DO serves; class instances round-trip through the
   shared codec.
-- Reach for it whenever DO method return values cross a `Schema.Class`
-  boundary or when you want streaming procedures.
