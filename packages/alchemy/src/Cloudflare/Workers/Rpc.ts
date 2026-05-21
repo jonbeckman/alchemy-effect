@@ -3,9 +3,19 @@ import type * as cf from "@cloudflare/workers-types";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import {
+  RpcClient,
+  RpcSerialization,
+  type Rpc,
+  type RpcGroup,
+} from "effect/unstable/rpc";
+import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import * as Socket from "effect/unstable/socket/Socket";
 import { isYieldableEffect } from "../../Util/effect.ts";
 import { fromCloudflareFetcher } from "../Fetcher.ts";
@@ -291,3 +301,69 @@ const appendStreamErrors = (s: Stream.Stream<string, unknown>) =>
       Stream.succeed(encodeStreamErrorMarker(cause)),
     ),
   );
+
+/**
+ * Drop-in replacement for alchemy's built-in DO RPC namespace, but the
+ * wire format is Effect's `RpcSerialization`, which round-trips
+ * `Schema.Class` instances cleanly (the built-in bridge `JSON.stringify`s
+ * each value and loses class identity).
+ *
+ * Pair it with `RpcServer.toHttpEffect(group)` on the DO's `fetch`
+ * handler; this helper builds the matching client side and exposes the
+ * same `namespace.getByName(id)` shape so the call-site looks identical
+ * to the built-in bridge:
+ *
+ * @example
+ * ```ts
+ * const agents = yield* ChatAgent;
+ * const agentsRpc = yield* Cloudflare.bindEffectRpc(agents, AgentRpcs);
+ *
+ * agentsRpc.getByName(id).sendChat({ threadId, prompt });
+ * agentsRpc.getByName(id).getMessages({ threadId });
+ * ```
+ *
+ * The URL passed to `RpcClient.layerProtocolHttp` is a dummy; requests
+ * never leave the worker isolate, every one is dispatched through the
+ * stub's `.fetch`.
+ */
+export const bindEffectRpc = <Rpcs extends Rpc.Any>(
+  namespace: { readonly getByName: (id: string) => { readonly fetch: any } },
+  group: RpcGroup.RpcGroup<Rpcs>,
+  options?: {
+    /**
+     * Override the rpc serialization layer. Defaults to NDJSON, which
+     * is required when any rpc in the group is a streaming rpc.
+     */
+    readonly serialization?: Layer.Layer<RpcSerialization.RpcSerialization>;
+  },
+): {
+  readonly getByName: (
+    id: string,
+  ) => Effect.Effect<
+    RpcClient.RpcClient<Rpcs, RpcClientError.RpcClientError>,
+    never,
+    Scope.Scope | Rpc.MiddlewareClient<Rpcs>
+  >;
+} => {
+  const serialization = options?.serialization ?? RpcSerialization.layerNdjson;
+  return {
+    getByName: (id) => {
+      const httpClient = HttpClient.layerMergedContext(
+        Effect.sync(() => {
+          const stub = namespace.getByName(id);
+          return HttpClient.make((request) => stub.fetch(request));
+        }),
+      );
+      const protocol = RpcClient.layerProtocolHttp({
+        url: "http://alchemy-rpc/",
+      }).pipe(Layer.provide(serialization), Layer.provide(httpClient));
+      return RpcClient.make(group).pipe(
+        Effect.provide(protocol),
+      ) as Effect.Effect<
+        RpcClient.RpcClient<Rpcs, RpcClientError.RpcClientError>,
+        never,
+        Scope.Scope | Rpc.MiddlewareClient<Rpcs>
+      >;
+    },
+  };
+};
