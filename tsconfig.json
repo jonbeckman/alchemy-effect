@@ -76,6 +76,9 @@
       "path": "./examples/cloudflare-planetscale-postgres-drizzle/tsconfig.json"
     },
     {
+      "path": "./examples/cloudflare-ai-search/tsconfig.json"
+    },
+    {
       "path": "./examples/cloudflare-secrets-store/tsconfig.json"
     },
     {

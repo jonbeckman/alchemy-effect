@@ -3,6 +3,7 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
 
 import { Gateway } from "./src/AiGateway.ts";
+import { Search } from "./src/AiSearch.ts";
 import Api from "./src/Api.ts";
 import { Bucket } from "./src/Bucket.ts";
 import SecondaryApiLive, { SecondaryApi } from "./src/SecondaryApi.ts";
@@ -30,6 +31,7 @@ export default Alchemy.Stack(
     const api = yield* Api;
     const bucket = yield* Bucket;
     const gateway = yield* Gateway;
+    const search = yield* Search;
     const workerTag = yield* WorkerTag;
     // Two Workers binding the same Agent DO triggers the regression where
     // a single Container DO namespace appears in multiple bindings on the
@@ -48,6 +50,7 @@ export default Alchemy.Stack(
       url: api.url.as<string>(),
       bucket: bucket.bucketName,
       gatewayId: gateway.gatewayId,
+      searchInstance: search.instanceName,
       workerTagUrl: workerTag.url.as<string>(),
       secondaryApiUrl: secondaryApi.url.as<string>(),
       deployedAt: announcement.deployedAt,

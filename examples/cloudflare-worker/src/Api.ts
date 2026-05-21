@@ -8,6 +8,7 @@ import { HttpServerRequest } from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import Agent from "./Agent.ts";
 import { Gateway } from "./AiGateway.ts";
+import { Search } from "./AiSearch.ts";
 import { Bucket } from "./Bucket.ts";
 import { KV } from "./KV.ts";
 import NotifyWorkflow from "./NotifyWorkflow.ts";
@@ -45,6 +46,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const queue = yield* Cloudflare.QueueBinding.bind(queueResource);
     const repos = yield* Cloudflare.Artifacts.bind(Repos);
     const aiGateway = yield* Cloudflare.AiGateway.bind(Gateway);
+    const aiSearch = yield* Cloudflare.AiSearch.bind(Search);
 
     // Effect-style queue consumer. Each batch is piped through the
     // handler; success ack()s every message in the batch, failure
@@ -362,6 +364,44 @@ export default class Api extends Cloudflare.Worker<Api>()(
         // Routes a Workers AI inference call through the gateway resource so
         // every request is observable in the Cloudflare AI Gateway UI and
         // benefits from caching/rate limiting configured on the resource.
+        // AI Search smoke test.
+        //
+        // GET  /search/info        round-trips the runtime AiSearchInstance
+        //                          binding by reading instance metadata.
+        // POST /search/query  { query }
+        //                          asks the bound AI Search instance for
+        //                          chunks relevant to the query.
+        if (
+          request.url.startsWith("/search/info") &&
+          request.method === "GET"
+        ) {
+          return yield* aiSearch.info().pipe(
+            Effect.flatMap((info) => HttpServerResponse.json(info)),
+            Effect.catchTag("AiSearchError", (err) =>
+              HttpServerResponse.json({ error: err.message }, { status: 500 }),
+            ),
+          );
+        }
+        if (
+          request.url.startsWith("/search/query") &&
+          request.method === "POST"
+        ) {
+          const text = yield* request.text;
+          const body = (() => {
+            try {
+              return JSON.parse(text || "{}") as { query?: string };
+            } catch {
+              return {} as { query?: string };
+            }
+          })();
+          const query = body.query?.trim() || "hello";
+          return yield* aiSearch.search({ query }).pipe(
+            Effect.flatMap((result) => HttpServerResponse.json(result)),
+            Effect.catchTag("AiSearchError", (err) =>
+              HttpServerResponse.json({ error: err.message }, { status: 500 }),
+            ),
+          );
+        }
         if (request.url.startsWith("/ai") && request.method === "POST") {
           const text = yield* request.text;
           const body = (() => {
@@ -452,6 +492,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
         Cloudflare.QueueEventSourceLive,
         Cloudflare.ArtifactsBindingLive,
         Cloudflare.AiGatewayBindingLive,
+        Cloudflare.AiSearchBindingLive,
       ),
     ),
   ),

@@ -13,6 +13,7 @@ import { ProfileLive } from "../Auth/Profile.ts";
 import { Random, RandomProvider } from "../Random.ts";
 import * as Access from "./Access.ts";
 import * as AiGateway from "./AiGateway/index.ts";
+import * as AiSearch from "./AiSearch/index.ts";
 import * as AnalyticsEngine from "./AnalyticsEngine/index.ts";
 import * as ApiToken from "./ApiToken/index.ts";
 import * as Artifacts from "./Artifacts/index.ts";
@@ -52,6 +53,8 @@ export const providers = () =>
       ApiToken.UserApiToken,
       AiGateway.AiGateway,
       AiGateway.AiGatewayBindingPolicy,
+      AiSearch.AiSearch,
+      AiSearch.AiSearchBindingPolicy,
       AnalyticsEngine.AnalyticsEngineDatasetBindingPolicy,
       Artifacts.ArtifactsBindingPolicy,
       Command,
@@ -92,6 +95,8 @@ export const providers = () =>
         ApiToken.UserApiTokenProvider(),
         AiGateway.AiGatewayProvider(),
         AiGateway.AiGatewayBindingPolicyLive,
+        AiSearch.AiSearchProvider(),
+        AiSearch.AiSearchBindingPolicyLive,
         AnalyticsEngine.AnalyticsEngineDatasetBindingPolicyLive,
         Artifacts.ArtifactsBindingPolicyLive,
         Containers.ContainerProvider(),

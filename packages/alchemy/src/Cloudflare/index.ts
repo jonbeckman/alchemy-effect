@@ -1,4 +1,5 @@
 export * from "./AiGateway/index.ts";
+export * from "./AiSearch/index.ts";
 export * from "./AnalyticsEngine/index.ts";
 export * from "./ApiToken/index.ts";
 export * from "./Artifacts/index.ts";
