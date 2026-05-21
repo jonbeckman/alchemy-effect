@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { DBCluster } from "../RDS/DBCluster.ts";
 import type { Secret } from "../SecretsManager/Secret.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface RollbackTransactionOptions {
   secret: Secret;
@@ -28,7 +29,8 @@ export class RollbackTransaction extends Binding.Service<
       request: RollbackTransactionRequest,
     ) => Effect.Effect<
       rdsdata.RollbackTransactionResponse,
-      rdsdata.RollbackTransactionError
+      rdsdata.RollbackTransactionError,
+      RuntimeContext
     >
   >
 >()("AWS.RDSData.RollbackTransaction") {}

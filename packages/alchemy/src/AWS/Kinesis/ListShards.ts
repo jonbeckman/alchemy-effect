@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Stream } from "./Stream.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListShardsRequest extends Omit<
   Kinesis.ListShardsInput,
@@ -17,7 +18,11 @@ export class ListShards extends Binding.Service<
   ) => Effect.Effect<
     (
       request?: ListShardsRequest,
-    ) => Effect.Effect<Kinesis.ListShardsOutput, Kinesis.ListShardsError>
+    ) => Effect.Effect<
+      Kinesis.ListShardsOutput,
+      Kinesis.ListShardsError,
+      RuntimeContext
+    >
   >
 >()("AWS.Kinesis.ListShards") {}
 

@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { EventBus } from "./EventBus.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeEventBusRequest extends Omit<
   eventbridge.DescribeEventBusRequest,
@@ -19,7 +20,8 @@ export class DescribeEventBus extends Binding.Service<
       request?: DescribeEventBusRequest,
     ) => Effect.Effect<
       eventbridge.DescribeEventBusResponse,
-      eventbridge.DescribeEventBusError
+      eventbridge.DescribeEventBusError,
+      RuntimeContext
     >
   >
 >()("AWS.EventBridge.DescribeEventBus") {}

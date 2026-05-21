@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Secret } from "./Secret.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetSecretValueRequest extends Omit<
   secretsmanager.GetSecretValueRequest,
@@ -22,7 +23,8 @@ export class GetSecretValue extends Binding.Service<
       request?: GetSecretValueRequest,
     ) => Effect.Effect<
       secretsmanager.GetSecretValueResponse,
-      secretsmanager.GetSecretValueError
+      secretsmanager.GetSecretValueError,
+      RuntimeContext
     >
   >
 >()("AWS.SecretsManager.GetSecretValue") {}

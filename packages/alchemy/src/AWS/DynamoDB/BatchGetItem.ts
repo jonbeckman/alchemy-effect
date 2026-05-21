@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 type BatchGetItemTables = [Table, ...Table[]];
 
@@ -58,7 +59,11 @@ export class BatchGetItem extends Binding.Service<
   ) => Effect.Effect<
     (
       request: BatchGetItemRequest,
-    ) => Effect.Effect<DynamoDB.BatchGetItemOutput, DynamoDB.BatchGetItemError>
+    ) => Effect.Effect<
+      DynamoDB.BatchGetItemOutput,
+      DynamoDB.BatchGetItemError,
+      RuntimeContext
+    >
   >
 >()("AWS.DynamoDB.BatchGetItem") {}
 

@@ -7,6 +7,7 @@ import {
   getTaggableResourceArn,
   type TaggableResource,
 } from "./binding-common.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListTagsForResourceRequest extends Omit<
   cloudwatch.ListTagsForResourceInput,
@@ -25,7 +26,8 @@ export class ListTagsForResource extends Binding.Service<
       request?: ListTagsForResourceRequest,
     ) => Effect.Effect<
       cloudwatch.ListTagsForResourceOutput,
-      cloudwatch.ListTagsForResourceError
+      cloudwatch.ListTagsForResourceError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.ListTagsForResource") {}

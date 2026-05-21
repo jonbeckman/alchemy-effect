@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListEventBusesRequest
   extends eventbridge.ListEventBusesRequest {}
@@ -14,7 +15,8 @@ export class ListEventBuses extends Binding.Service<
       request?: ListEventBusesRequest,
     ) => Effect.Effect<
       eventbridge.ListEventBusesResponse,
-      eventbridge.ListEventBusesError
+      eventbridge.ListEventBusesError,
+      RuntimeContext
     >
   >
 >()("AWS.EventBridge.ListEventBuses") {}

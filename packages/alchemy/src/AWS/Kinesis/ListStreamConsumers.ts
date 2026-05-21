@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Stream } from "./Stream.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListStreamConsumersRequest extends Omit<
   Kinesis.ListStreamConsumersInput,
@@ -19,7 +20,8 @@ export class ListStreamConsumers extends Binding.Service<
       request?: ListStreamConsumersRequest,
     ) => Effect.Effect<
       Kinesis.ListStreamConsumersOutput,
-      Kinesis.ListStreamConsumersError
+      Kinesis.ListStreamConsumersError,
+      RuntimeContext
     >
   >
 >()("AWS.Kinesis.ListStreamConsumers") {}

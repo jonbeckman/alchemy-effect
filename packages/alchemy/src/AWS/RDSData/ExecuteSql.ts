@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { DBCluster } from "../RDS/DBCluster.ts";
 import type { Secret } from "../SecretsManager/Secret.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ExecuteSqlOptions {
   secret: Secret;
@@ -28,7 +29,11 @@ export class ExecuteSql extends Binding.Service<
   ) => Effect.Effect<
     (
       request: ExecuteSqlRequest,
-    ) => Effect.Effect<rdsdata.ExecuteSqlResponse, rdsdata.ExecuteSqlError>
+    ) => Effect.Effect<
+      rdsdata.ExecuteSqlResponse,
+      rdsdata.ExecuteSqlError,
+      RuntimeContext
+    >
   >
 >()("AWS.RDSData.ExecuteSql") {}
 

@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Bucket } from "./Bucket.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface CreateMultipartUploadRequest extends Omit<
   S3.CreateMultipartUploadRequest,
@@ -20,7 +21,8 @@ export class CreateMultipartUpload extends Binding.Service<
       request: CreateMultipartUploadRequest,
     ) => Effect.Effect<
       S3.CreateMultipartUploadOutput,
-      S3.CreateMultipartUploadError
+      S3.CreateMultipartUploadError,
+      RuntimeContext
     >
   >
 >()("AWS.S3.CreateMultipartUpload") {}

@@ -3,6 +3,7 @@ import * as Lambda from "alchemy/AWS/Lambda";
 import * as S3 from "alchemy/AWS/S3";
 import * as SQS from "alchemy/AWS/SQS";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
+import type { RuntimeContext } from "alchemy/RuntimeContext";
 import { Stack } from "alchemy/Stack";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
@@ -26,8 +27,10 @@ export class GetJobError extends Data.TaggedError("GetJobError")<{
 export class JobStorage extends Context.Service<
   JobStorage,
   {
-    putJob(job: Job): Effect.Effect<Job, PutJobError>;
-    getJob(jobId: string): Effect.Effect<Job | undefined, GetJobError>;
+    putJob(job: Job): Effect.Effect<Job, PutJobError, RuntimeContext>;
+    getJob(
+      jobId: string,
+    ): Effect.Effect<Job | undefined, GetJobError, RuntimeContext>;
   }
 >()("JobStorage") {}
 

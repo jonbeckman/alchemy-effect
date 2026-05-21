@@ -6,12 +6,15 @@ import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Queue } from "./Queue.ts";
 import { SendMessageBatch } from "./SendMessageBatch.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export class QueueSink extends Binding.Service<
   QueueSink,
   (
     queue: Queue,
-  ) => Effect.Effect<Sink.Sink<void, string, readonly string[], never>>
+  ) => Effect.Effect<
+    Sink.Sink<void, string, readonly string[], never, RuntimeContext>
+  >
 >()("AWS.SQS.QueueSink") {}
 
 export const QueueSinkLive = Layer.effect(

@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface PutItemRequest extends Omit<
   DynamoDB.PutItemInput,
@@ -17,7 +18,11 @@ export class PutItem extends Binding.Service<
   ) => Effect.Effect<
     (
       request: PutItemRequest,
-    ) => Effect.Effect<DynamoDB.PutItemOutput, DynamoDB.PutItemError>
+    ) => Effect.Effect<
+      DynamoDB.PutItemOutput,
+      DynamoDB.PutItemError,
+      RuntimeContext
+    >
   >
 >()("AWS.DynamoDB.PutItem") {}
 

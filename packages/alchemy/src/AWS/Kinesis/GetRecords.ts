@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Stream } from "./Stream.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetRecordsRequest extends Kinesis.GetRecordsInput {}
 
@@ -14,7 +15,11 @@ export class GetRecords extends Binding.Service<
   ) => Effect.Effect<
     (
       request: GetRecordsRequest,
-    ) => Effect.Effect<Kinesis.GetRecordsOutput, Kinesis.GetRecordsError>
+    ) => Effect.Effect<
+      Kinesis.GetRecordsOutput,
+      Kinesis.GetRecordsError,
+      RuntimeContext
+    >
   >
 >()("AWS.Kinesis.GetRecords") {}
 

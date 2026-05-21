@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Bucket } from "./Bucket.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListObjectsV2Request extends Omit<
   S3.ListObjectsV2Request,
@@ -18,7 +19,11 @@ export class ListObjectsV2 extends Binding.Service<
   ) => Effect.Effect<
     (
       request?: ListObjectsV2Request,
-    ) => Effect.Effect<S3.ListObjectsV2Output, S3.ListObjectsV2Error>
+    ) => Effect.Effect<
+      S3.ListObjectsV2Output,
+      S3.ListObjectsV2Error,
+      RuntimeContext
+    >
   >
 >()("AWS.S3.ListObjectsV2") {}
 

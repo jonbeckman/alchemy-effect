@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ExecuteStatementRequest
   extends DynamoDB.ExecuteStatementInput {}
@@ -35,7 +36,8 @@ export class ExecuteStatement extends Binding.Service<
       request: ExecuteStatementRequest,
     ) => Effect.Effect<
       DynamoDB.ExecuteStatementOutput,
-      DynamoDB.ExecuteStatementError
+      DynamoDB.ExecuteStatementError,
+      RuntimeContext
     >
   >
 >()("AWS.DynamoDB.ExecuteStatement") {}

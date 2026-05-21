@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListAlarmMuteRulesRequest
   extends cloudwatch.ListAlarmMuteRulesInput {}
@@ -17,7 +18,8 @@ export class ListAlarmMuteRules extends Binding.Service<
       request?: ListAlarmMuteRulesRequest,
     ) => Effect.Effect<
       cloudwatch.ListAlarmMuteRulesOutput,
-      cloudwatch.ListAlarmMuteRulesError
+      cloudwatch.ListAlarmMuteRulesError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.ListAlarmMuteRules") {}

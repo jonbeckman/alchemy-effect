@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 /**
  * Runtime binding for `secretsmanager:GetRandomPassword`.
@@ -14,7 +15,8 @@ export class GetRandomPassword extends Binding.Service<
       request?: secretsmanager.GetRandomPasswordRequest,
     ) => Effect.Effect<
       secretsmanager.GetRandomPasswordResponse,
-      secretsmanager.GetRandomPasswordError
+      secretsmanager.GetRandomPasswordError,
+      RuntimeContext
     >
   >
 >()("AWS.SecretsManager.GetRandomPassword") {}

@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetItemRequest extends Omit<
   DynamoDB.GetItemInput,
@@ -35,7 +36,11 @@ export class GetItem extends Binding.Service<
   ) => Effect.Effect<
     (
       request: GetItemRequest,
-    ) => Effect.Effect<DynamoDB.GetItemOutput, DynamoDB.GetItemError>
+    ) => Effect.Effect<
+      DynamoDB.GetItemOutput,
+      DynamoDB.GetItemError,
+      RuntimeContext
+    >
   >
 >()("AWS.DynamoDB.GetItem") {}
 

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeAlarmHistoryRequest
   extends cloudwatch.DescribeAlarmHistoryInput {}
@@ -17,7 +18,8 @@ export class DescribeAlarmHistory extends Binding.Service<
       request?: DescribeAlarmHistoryRequest,
     ) => Effect.Effect<
       cloudwatch.DescribeAlarmHistoryOutput,
-      cloudwatch.DescribeAlarmHistoryError
+      cloudwatch.DescribeAlarmHistoryError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.DescribeAlarmHistory") {}

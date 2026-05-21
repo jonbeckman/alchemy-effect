@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Dashboard } from "./Dashboard.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetDashboardRequest extends Omit<
   cloudwatch.GetDashboardInput,
@@ -22,7 +23,8 @@ export class GetDashboard extends Binding.Service<
       request?: GetDashboardRequest,
     ) => Effect.Effect<
       cloudwatch.GetDashboardOutput,
-      cloudwatch.GetDashboardError
+      cloudwatch.GetDashboardError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.GetDashboard") {}

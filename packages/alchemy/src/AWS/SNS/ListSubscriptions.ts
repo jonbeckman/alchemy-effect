@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListSubscriptionsRequest extends sns.ListSubscriptionsInput {}
 
@@ -13,7 +14,8 @@ export class ListSubscriptions extends Binding.Service<
       request?: ListSubscriptionsRequest,
     ) => Effect.Effect<
       sns.ListSubscriptionsResponse,
-      sns.ListSubscriptionsError
+      sns.ListSubscriptionsError,
+      RuntimeContext
     >
   >
 >()("AWS.SNS.ListSubscriptions") {}

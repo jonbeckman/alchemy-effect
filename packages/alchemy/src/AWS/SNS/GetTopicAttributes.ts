@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetTopicAttributesRequest extends Omit<
   sns.GetTopicAttributesInput,
@@ -19,7 +20,8 @@ export class GetTopicAttributes extends Binding.Service<
       request?: GetTopicAttributesRequest,
     ) => Effect.Effect<
       sns.GetTopicAttributesResponse,
-      sns.GetTopicAttributesError
+      sns.GetTopicAttributesError,
+      RuntimeContext
     >
   >
 >()("AWS.SNS.GetTopicAttributes") {}

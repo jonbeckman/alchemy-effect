@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface RestoreTableToPointInTimeRequest extends Omit<
   DynamoDB.RestoreTableToPointInTimeInput,
@@ -20,7 +21,8 @@ export class RestoreTableToPointInTime extends Binding.Service<
       request: RestoreTableToPointInTimeRequest,
     ) => Effect.Effect<
       DynamoDB.RestoreTableToPointInTimeOutput,
-      DynamoDB.RestoreTableToPointInTimeError
+      DynamoDB.RestoreTableToPointInTimeError,
+      RuntimeContext
     >
   >
 >()("AWS.DynamoDB.RestoreTableToPointInTime") {}

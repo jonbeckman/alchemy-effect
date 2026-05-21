@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Stream } from "./Stream.ts";
 import type { StreamConsumer } from "./StreamConsumer.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 type TaggableResource = Stream | StreamConsumer;
 
@@ -22,7 +23,8 @@ export class ListTagsForResource extends Binding.Service<
       request?: ListTagsForResourceRequest,
     ) => Effect.Effect<
       Kinesis.ListTagsForResourceOutput,
-      Kinesis.ListTagsForResourceError
+      Kinesis.ListTagsForResourceError,
+      RuntimeContext
     >
   >
 >()("AWS.Kinesis.ListTagsForResource") {}

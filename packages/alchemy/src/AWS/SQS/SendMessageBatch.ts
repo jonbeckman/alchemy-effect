@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Queue } from "./Queue.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface SendMessageBatchRequest extends Omit<
   sqs.SendMessageBatchRequest,
@@ -18,7 +19,11 @@ export class SendMessageBatch extends Binding.Service<
   ) => Effect.Effect<
     (
       request: SendMessageBatchRequest,
-    ) => Effect.Effect<sqs.SendMessageBatchResult, sqs.SendMessageBatchError>
+    ) => Effect.Effect<
+      sqs.SendMessageBatchResult,
+      sqs.SendMessageBatchError,
+      RuntimeContext
+    >
   >
 >()("AWS.SQS.SendMessageBatch") {}
 

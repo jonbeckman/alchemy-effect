@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeAlarmsForMetricRequest
   extends cloudwatch.DescribeAlarmsForMetricInput {}
@@ -17,7 +18,8 @@ export class DescribeAlarmsForMetric extends Binding.Service<
       request: DescribeAlarmsForMetricRequest,
     ) => Effect.Effect<
       cloudwatch.DescribeAlarmsForMetricOutput,
-      cloudwatch.DescribeAlarmsForMetricError
+      cloudwatch.DescribeAlarmsForMetricError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.DescribeAlarmsForMetric") {}

@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Bucket } from "./Bucket.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetObjectRequest extends Omit<S3.GetObjectRequest, "Bucket"> {}
 
@@ -15,7 +16,7 @@ export class GetObject extends Binding.Service<
   ) => Effect.Effect<
     (
       request: GetObjectRequest,
-    ) => Effect.Effect<S3.GetObjectOutput, S3.GetObjectError>
+    ) => Effect.Effect<S3.GetObjectOutput, S3.GetObjectError, RuntimeContext>
   >
 >()("AWS.S3.GetObject") {}
 

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListManagedInsightRulesRequest
   extends cloudwatch.ListManagedInsightRulesInput {}
@@ -17,7 +18,8 @@ export class ListManagedInsightRules extends Binding.Service<
       request?: ListManagedInsightRulesRequest,
     ) => Effect.Effect<
       cloudwatch.ListManagedInsightRulesOutput,
-      cloudwatch.ListManagedInsightRulesError
+      cloudwatch.ListManagedInsightRulesError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.ListManagedInsightRules") {}

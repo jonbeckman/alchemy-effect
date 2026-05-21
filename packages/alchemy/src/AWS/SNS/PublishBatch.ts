@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface PublishBatchRequest extends Omit<
   sns.PublishBatchInput,
@@ -17,7 +18,11 @@ export class PublishBatch extends Binding.Service<
   ) => Effect.Effect<
     (
       request: PublishBatchRequest,
-    ) => Effect.Effect<sns.PublishBatchResponse, sns.PublishBatchError>
+    ) => Effect.Effect<
+      sns.PublishBatchResponse,
+      sns.PublishBatchError,
+      RuntimeContext
+    >
   >
 >()("AWS.SNS.PublishBatch") {}
 

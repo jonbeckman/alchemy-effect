@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Subscription } from "./Subscription.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface SetSubscriptionAttributesRequest extends Omit<
   sns.SetSubscriptionAttributesInput,
@@ -19,7 +20,8 @@ export class SetSubscriptionAttributes extends Binding.Service<
       request: SetSubscriptionAttributesRequest,
     ) => Effect.Effect<
       sns.SetSubscriptionAttributesResponse,
-      sns.SetSubscriptionAttributesError
+      sns.SetSubscriptionAttributesError,
+      RuntimeContext
     >
   >
 >()("AWS.SNS.SetSubscriptionAttributes") {}

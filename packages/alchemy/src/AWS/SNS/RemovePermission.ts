@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface RemovePermissionRequest extends Omit<
   sns.RemovePermissionInput,
@@ -17,7 +18,11 @@ export class RemovePermission extends Binding.Service<
   ) => Effect.Effect<
     (
       request: RemovePermissionRequest,
-    ) => Effect.Effect<sns.RemovePermissionResponse, sns.RemovePermissionError>
+    ) => Effect.Effect<
+      sns.RemovePermissionResponse,
+      sns.RemovePermissionError,
+      RuntimeContext
+    >
   >
 >()("AWS.SNS.RemovePermission") {}
 

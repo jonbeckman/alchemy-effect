@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListTagsOfResourceRequest extends Omit<
   DynamoDB.ListTagsOfResourceInput,
@@ -19,7 +20,8 @@ export class ListTagsOfResource extends Binding.Service<
       request?: ListTagsOfResourceRequest,
     ) => Effect.Effect<
       DynamoDB.ListTagsOfResourceOutput,
-      DynamoDB.ListTagsOfResourceError
+      DynamoDB.ListTagsOfResourceError,
+      RuntimeContext
     >
   >
 >()("AWS.DynamoDB.ListTagsOfResource") {}

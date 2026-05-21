@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Queue } from "./Queue.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DeleteMessageRequest extends Omit<
   sqs.DeleteMessageRequest,
@@ -18,7 +19,11 @@ export class DeleteMessage extends Binding.Service<
   ) => Effect.Effect<
     (
       request: DeleteMessageRequest,
-    ) => Effect.Effect<sqs.DeleteMessageResponse, sqs.DeleteMessageError>
+    ) => Effect.Effect<
+      sqs.DeleteMessageResponse,
+      sqs.DeleteMessageError,
+      RuntimeContext
+    >
   >
 >()("AWS.SQS.DeleteMessage") {}
 

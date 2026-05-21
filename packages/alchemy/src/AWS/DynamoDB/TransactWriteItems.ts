@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 type TransactWriteItemsTables = [Table, ...Table[]];
 
@@ -95,7 +96,8 @@ export class TransactWriteItems extends Binding.Service<
       request: TransactWriteItemsRequest,
     ) => Effect.Effect<
       DynamoDB.TransactWriteItemsOutput,
-      DynamoDB.TransactWriteItemsError
+      DynamoDB.TransactWriteItemsError,
+      RuntimeContext
     >
   >
 >()("AWS.DynamoDB.TransactWriteItems") {}

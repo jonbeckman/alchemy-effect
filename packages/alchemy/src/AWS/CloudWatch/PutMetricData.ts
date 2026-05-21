@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface PutMetricDataRequest extends cloudwatch.PutMetricDataInput {}
 
@@ -16,7 +17,8 @@ export class PutMetricData extends Binding.Service<
       request: PutMetricDataRequest,
     ) => Effect.Effect<
       cloudwatch.PutMetricDataResponse,
-      cloudwatch.PutMetricDataError
+      cloudwatch.PutMetricDataError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.PutMetricData") {}

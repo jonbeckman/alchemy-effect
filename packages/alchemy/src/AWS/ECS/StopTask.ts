@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import { isTask } from "./Task.ts";
 import type { Cluster } from "./Cluster.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface StopTaskRequest extends Omit<ECS.StopTaskRequest, "cluster"> {}
 
@@ -15,7 +16,7 @@ export class StopTask extends Binding.Service<
   ) => Effect.Effect<
     (
       request: StopTaskRequest,
-    ) => Effect.Effect<ECS.StopTaskResponse, ECS.StopTaskError>
+    ) => Effect.Effect<ECS.StopTaskResponse, ECS.StopTaskError, RuntimeContext>
   >
 >()("AWS.ECS.StopTask") {}
 

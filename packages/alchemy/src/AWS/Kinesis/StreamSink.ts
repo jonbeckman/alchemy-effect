@@ -6,6 +6,7 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import { PutRecords } from "./PutRecords.ts";
 import type { Stream } from "./Stream.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export type StreamSinkRecord = Kinesis.PutRecordsRequestEntry;
 
@@ -14,7 +15,13 @@ export class StreamSink extends Binding.Service<
   (
     stream: Stream,
   ) => Effect.Effect<
-    Sink.Sink<void, StreamSinkRecord, readonly StreamSinkRecord[], never>
+    Sink.Sink<
+      void,
+      StreamSinkRecord,
+      readonly StreamSinkRecord[],
+      never,
+      RuntimeContext
+    >
   >
 >()("AWS.Kinesis.StreamSink") {}
 

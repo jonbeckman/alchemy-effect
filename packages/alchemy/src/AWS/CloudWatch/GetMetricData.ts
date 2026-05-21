@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetMetricDataRequest extends cloudwatch.GetMetricDataInput {}
 
@@ -16,7 +17,8 @@ export class GetMetricData extends Binding.Service<
       request: GetMetricDataRequest,
     ) => Effect.Effect<
       cloudwatch.GetMetricDataOutput,
-      cloudwatch.GetMetricDataError
+      cloudwatch.GetMetricDataError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.GetMetricData") {}

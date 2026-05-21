@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Stream } from "./Stream.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetResourcePolicyRequest extends Omit<
   Kinesis.GetResourcePolicyInput,
@@ -19,7 +20,8 @@ export class GetResourcePolicy extends Binding.Service<
       request?: GetResourcePolicyRequest,
     ) => Effect.Effect<
       Kinesis.GetResourcePolicyOutput,
-      Kinesis.GetResourcePolicyError
+      Kinesis.GetResourcePolicyError,
+      RuntimeContext
     >
   >
 >()("AWS.Kinesis.GetResourcePolicy") {}

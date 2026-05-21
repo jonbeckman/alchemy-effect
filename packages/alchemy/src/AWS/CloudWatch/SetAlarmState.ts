@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { AlarmResource } from "./binding-common.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface SetAlarmStateRequest extends Omit<
   cloudwatch.SetAlarmStateInput,
@@ -22,7 +23,8 @@ export class SetAlarmState extends Binding.Service<
       request: SetAlarmStateRequest,
     ) => Effect.Effect<
       cloudwatch.SetAlarmStateResponse,
-      cloudwatch.SetAlarmStateError
+      cloudwatch.SetAlarmStateError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.SetAlarmState") {}

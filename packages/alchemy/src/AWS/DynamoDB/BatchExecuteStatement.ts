@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 type BatchExecuteStatementTables = [Table, ...Table[]];
 
@@ -53,7 +54,8 @@ export class BatchExecuteStatement extends Binding.Service<
       request: BatchExecuteStatementRequest,
     ) => Effect.Effect<
       DynamoDB.BatchExecuteStatementOutput,
-      DynamoDB.BatchExecuteStatementError
+      DynamoDB.BatchExecuteStatementError,
+      RuntimeContext
     >
   >
 >()("AWS.DynamoDB.BatchExecuteStatement") {}

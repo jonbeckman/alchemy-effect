@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import { isTask } from "./Task.ts";
 import type { Cluster } from "./Cluster.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListTasksRequest extends Omit<
   ECS.ListTasksRequest,
@@ -18,7 +19,11 @@ export class ListTasks extends Binding.Service<
   ) => Effect.Effect<
     (
       request: ListTasksRequest,
-    ) => Effect.Effect<ECS.ListTasksResponse, ECS.ListTasksError>
+    ) => Effect.Effect<
+      ECS.ListTasksResponse,
+      ECS.ListTasksError,
+      RuntimeContext
+    >
   >
 >()("AWS.ECS.ListTasks") {}
 

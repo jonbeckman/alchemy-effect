@@ -5,12 +5,15 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import { PublishBatch } from "./PublishBatch.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export class TopicSink extends Binding.Service<
   TopicSink,
   (
     topic: Topic,
-  ) => Effect.Effect<Sink.Sink<void, string, readonly string[], never>>
+  ) => Effect.Effect<
+    Sink.Sink<void, string, readonly string[], never, RuntimeContext>
+  >
 >()("AWS.SNS.TopicSink") {}
 
 export const TopicSinkLive = Layer.effect(

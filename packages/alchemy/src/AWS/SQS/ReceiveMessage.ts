@@ -6,6 +6,7 @@ import * as Output from "../../Output.ts";
 import { isInstance } from "../EC2/Instance.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Queue } from "./Queue.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ReceiveMessageRequest extends Omit<
   sqs.ReceiveMessageRequest,
@@ -19,7 +20,11 @@ export class ReceiveMessage extends Binding.Service<
   ) => Effect.Effect<
     (
       request: ReceiveMessageRequest,
-    ) => Effect.Effect<sqs.ReceiveMessageResult, sqs.ReceiveMessageError>
+    ) => Effect.Effect<
+      sqs.ReceiveMessageResult,
+      sqs.ReceiveMessageError,
+      RuntimeContext
+    >
   >
 >()("AWS.SQS.ReceiveMessage") {}
 

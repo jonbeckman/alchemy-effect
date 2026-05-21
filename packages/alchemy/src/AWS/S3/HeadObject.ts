@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Bucket } from "./Bucket.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface HeadObjectRequest extends Omit<
   S3.HeadObjectRequest,
@@ -18,7 +19,7 @@ export class HeadObject extends Binding.Service<
   ) => Effect.Effect<
     (
       request: HeadObjectRequest,
-    ) => Effect.Effect<S3.HeadObjectOutput, S3.HeadObjectError>
+    ) => Effect.Effect<S3.HeadObjectOutput, S3.HeadObjectError, RuntimeContext>
   >
 >()("AWS.S3.HeadObject") {}
 

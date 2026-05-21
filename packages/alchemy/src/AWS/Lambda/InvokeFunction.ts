@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import type { Function } from "./Function.ts";
 import { isFunction } from "./Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface InvokeFunctionRequest extends Omit<
   Lambda.InvocationRequest,
@@ -18,7 +19,11 @@ export class InvokeFunction extends Binding.Service<
   ) => Effect.Effect<
     (
       request: InvokeFunctionRequest,
-    ) => Effect.Effect<Lambda.InvocationResponse, Lambda.InvokeError>
+    ) => Effect.Effect<
+      Lambda.InvocationResponse,
+      Lambda.InvokeError,
+      RuntimeContext
+    >
   >
 >()("AWS.Lambda.InvokeFunction") {}
 

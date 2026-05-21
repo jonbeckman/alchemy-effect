@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListSubscriptionsByTopicRequest extends Omit<
   sns.ListSubscriptionsByTopicInput,
@@ -19,7 +20,8 @@ export class ListSubscriptionsByTopic extends Binding.Service<
       request?: ListSubscriptionsByTopicRequest,
     ) => Effect.Effect<
       sns.ListSubscriptionsByTopicResponse,
-      sns.ListSubscriptionsByTopicError
+      sns.ListSubscriptionsByTopicError,
+      RuntimeContext
     >
   >
 >()("AWS.SNS.ListSubscriptionsByTopic") {}

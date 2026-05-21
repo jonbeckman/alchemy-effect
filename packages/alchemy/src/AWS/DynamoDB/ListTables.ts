@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListTablesRequest extends DynamoDB.ListTablesInput {}
 
@@ -11,7 +12,11 @@ export class ListTables extends Binding.Service<
   () => Effect.Effect<
     (
       request?: ListTablesRequest,
-    ) => Effect.Effect<DynamoDB.ListTablesOutput, DynamoDB.ListTablesError>
+    ) => Effect.Effect<
+      DynamoDB.ListTablesOutput,
+      DynamoDB.ListTablesError,
+      RuntimeContext
+    >
   >
 >()("AWS.DynamoDB.ListTables") {}
 

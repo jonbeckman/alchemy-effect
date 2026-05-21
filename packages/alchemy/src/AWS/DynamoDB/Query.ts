@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface QueryRequest extends Omit<DynamoDB.QueryInput, "TableName"> {}
 
@@ -15,7 +16,11 @@ export class Query extends Binding.Service<
   ) => Effect.Effect<
     (
       request: QueryRequest,
-    ) => Effect.Effect<DynamoDB.QueryOutput, DynamoDB.QueryError>
+    ) => Effect.Effect<
+      DynamoDB.QueryOutput,
+      DynamoDB.QueryError,
+      RuntimeContext
+    >
   >
 >()("AWS.DynamoDB.Query") {}
 

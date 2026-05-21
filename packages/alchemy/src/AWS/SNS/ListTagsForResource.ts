@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListTagsForResourceRequest extends Omit<
   sns.ListTagsForResourceRequest,
@@ -19,7 +20,8 @@ export class ListTagsForResource extends Binding.Service<
       request?: ListTagsForResourceRequest,
     ) => Effect.Effect<
       sns.ListTagsForResourceResponse,
-      sns.ListTagsForResourceError
+      sns.ListTagsForResourceError,
+      RuntimeContext
     >
   >
 >()("AWS.SNS.ListTagsForResource") {}

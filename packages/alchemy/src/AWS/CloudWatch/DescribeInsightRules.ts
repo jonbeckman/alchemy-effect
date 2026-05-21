@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeInsightRulesRequest
   extends cloudwatch.DescribeInsightRulesInput {}
@@ -17,7 +18,8 @@ export class DescribeInsightRules extends Binding.Service<
       request?: DescribeInsightRulesRequest,
     ) => Effect.Effect<
       cloudwatch.DescribeInsightRulesOutput,
-      cloudwatch.DescribeInsightRulesError
+      cloudwatch.DescribeInsightRulesError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.DescribeInsightRules") {}

@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeTimeToLiveRequest extends Omit<
   DynamoDB.DescribeTimeToLiveInput,
@@ -19,7 +20,8 @@ export class DescribeTimeToLive extends Binding.Service<
       request?: DescribeTimeToLiveRequest,
     ) => Effect.Effect<
       DynamoDB.DescribeTimeToLiveOutput,
-      DynamoDB.DescribeTimeToLiveError
+      DynamoDB.DescribeTimeToLiveError,
+      RuntimeContext
     >
   >
 >()("AWS.DynamoDB.DescribeTimeToLive") {}

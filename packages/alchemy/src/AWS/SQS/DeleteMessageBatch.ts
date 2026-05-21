@@ -6,6 +6,7 @@ import * as Output from "../../Output.ts";
 import { isInstance } from "../EC2/Instance.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Queue } from "./Queue.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DeleteMessageBatchRequest extends Omit<
   sqs.DeleteMessageBatchRequest,
@@ -21,7 +22,8 @@ export class DeleteMessageBatch extends Binding.Service<
       request: DeleteMessageBatchRequest,
     ) => Effect.Effect<
       sqs.DeleteMessageBatchResult,
-      sqs.DeleteMessageBatchError
+      sqs.DeleteMessageBatchError,
+      RuntimeContext
     >
   >
 >()("AWS.SQS.DeleteMessageBatch") {}

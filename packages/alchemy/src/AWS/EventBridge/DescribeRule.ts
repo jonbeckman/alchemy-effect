@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Rule } from "./Rule.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeRuleRequest extends Omit<
   eventbridge.DescribeRuleRequest,
@@ -19,7 +20,8 @@ export class DescribeRule extends Binding.Service<
       request?: DescribeRuleRequest,
     ) => Effect.Effect<
       eventbridge.DescribeRuleResponse,
-      eventbridge.DescribeRuleError
+      eventbridge.DescribeRuleError,
+      RuntimeContext
     >
   >
 >()("AWS.EventBridge.DescribeRule") {}

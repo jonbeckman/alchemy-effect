@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ExecuteTransactionRequest
   extends DynamoDB.ExecuteTransactionInput {}
@@ -19,7 +20,8 @@ export class ExecuteTransaction extends Binding.Service<
       request: ExecuteTransactionRequest,
     ) => Effect.Effect<
       DynamoDB.ExecuteTransactionOutput,
-      DynamoDB.ExecuteTransactionError
+      DynamoDB.ExecuteTransactionError,
+      RuntimeContext
     >
   >
 >()("AWS.DynamoDB.ExecuteTransaction") {}

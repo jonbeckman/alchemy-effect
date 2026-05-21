@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface PublishRequest extends Omit<
   sns.PublishInput,
@@ -17,7 +18,7 @@ export class Publish extends Binding.Service<
   ) => Effect.Effect<
     (
       request: PublishRequest,
-    ) => Effect.Effect<sns.PublishResponse, sns.PublishError>
+    ) => Effect.Effect<sns.PublishResponse, sns.PublishError, RuntimeContext>
   >
 >()("AWS.SNS.Publish") {}
 

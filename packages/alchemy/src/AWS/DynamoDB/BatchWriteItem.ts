@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 type BatchWriteItemTables = [Table, ...Table[]];
 
@@ -63,7 +64,8 @@ export class BatchWriteItem extends Binding.Service<
       request: BatchWriteItemRequest,
     ) => Effect.Effect<
       DynamoDB.BatchWriteItemOutput,
-      DynamoDB.BatchWriteItemError
+      DynamoDB.BatchWriteItemError,
+      RuntimeContext
     >
   >
 >()("AWS.DynamoDB.BatchWriteItem") {}

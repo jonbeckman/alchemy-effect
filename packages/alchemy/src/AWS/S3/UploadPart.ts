@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Bucket } from "./Bucket.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface UploadPartRequest extends Omit<
   S3.UploadPartRequest,
@@ -18,7 +19,7 @@ export class UploadPart extends Binding.Service<
   ) => Effect.Effect<
     (
       request: UploadPartRequest,
-    ) => Effect.Effect<S3.UploadPartOutput, S3.UploadPartError>
+    ) => Effect.Effect<S3.UploadPartOutput, S3.UploadPartError, RuntimeContext>
   >
 >()("AWS.S3.UploadPart") {}
 

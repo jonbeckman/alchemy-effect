@@ -1,6 +1,7 @@
 import * as S3 from "@distilled.cloud/aws/s3";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
@@ -34,7 +35,7 @@ export class PutObject extends Binding.Service<
   ) => Effect.Effect<
     (
       request: PutObjectRequest,
-    ) => Effect.Effect<S3.PutObjectOutput, S3.PutObjectError>
+    ) => Effect.Effect<S3.PutObjectOutput, S3.PutObjectError, RuntimeContext>
   >
 >()("AWS.S3.PutObject") {}
 

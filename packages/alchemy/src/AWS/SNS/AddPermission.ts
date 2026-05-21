@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface AddPermissionRequest extends Omit<
   sns.AddPermissionInput,
@@ -17,7 +18,11 @@ export class AddPermission extends Binding.Service<
   ) => Effect.Effect<
     (
       request: AddPermissionRequest,
-    ) => Effect.Effect<sns.AddPermissionResponse, sns.AddPermissionError>
+    ) => Effect.Effect<
+      sns.AddPermissionResponse,
+      sns.AddPermissionError,
+      RuntimeContext
+    >
   >
 >()("AWS.SNS.AddPermission") {}
 

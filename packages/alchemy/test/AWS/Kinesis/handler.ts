@@ -1,4 +1,5 @@
 import * as AWS from "@/AWS";
+import type { RuntimeContext } from "@/RuntimeContext.ts";
 import * as Kinesis from "@distilled.cloud/aws/kinesis";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -324,7 +325,11 @@ class RecordsNotReady extends Data.TaggedError("RecordsNotReady") {}
 const waitForRecords = (
   getRecords: (
     request: Kinesis.GetRecordsInput,
-  ) => Effect.Effect<Kinesis.GetRecordsOutput, Kinesis.GetRecordsError>,
+  ) => Effect.Effect<
+    Kinesis.GetRecordsOutput,
+    Kinesis.GetRecordsError,
+    RuntimeContext
+  >,
   shardIterator: string,
 ) =>
   getRecords({

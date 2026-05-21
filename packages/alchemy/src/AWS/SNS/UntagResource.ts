@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface UntagResourceRequest extends Omit<
   sns.UntagResourceRequest,
@@ -17,7 +18,11 @@ export class UntagResource extends Binding.Service<
   ) => Effect.Effect<
     (
       request: UntagResourceRequest,
-    ) => Effect.Effect<sns.UntagResourceResponse, sns.UntagResourceError>
+    ) => Effect.Effect<
+      sns.UntagResourceResponse,
+      sns.UntagResourceError,
+      RuntimeContext
+    >
   >
 >()("AWS.SNS.UntagResource") {}
 

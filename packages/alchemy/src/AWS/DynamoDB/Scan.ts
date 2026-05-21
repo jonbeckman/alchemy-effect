@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ScanRequest extends Omit<DynamoDB.ScanInput, "TableName"> {}
 
@@ -15,7 +16,7 @@ export class Scan extends Binding.Service<
   ) => Effect.Effect<
     (
       request: ScanRequest,
-    ) => Effect.Effect<DynamoDB.ScanOutput, DynamoDB.ScanError>
+    ) => Effect.Effect<DynamoDB.ScanOutput, DynamoDB.ScanError, RuntimeContext>
   >
 >()("AWS.DynamoDB.Scan") {}
 

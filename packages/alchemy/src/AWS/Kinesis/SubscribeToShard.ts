@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { StreamConsumer } from "./StreamConsumer.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface SubscribeToShardRequest extends Omit<
   Kinesis.SubscribeToShardInput,
@@ -19,7 +20,8 @@ export class SubscribeToShard extends Binding.Service<
       request: SubscribeToShardRequest,
     ) => Effect.Effect<
       Kinesis.SubscribeToShardOutput,
-      Kinesis.SubscribeToShardError
+      Kinesis.SubscribeToShardError,
+      RuntimeContext
     >
   >
 >()("AWS.Kinesis.SubscribeToShard") {}

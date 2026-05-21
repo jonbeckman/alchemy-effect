@@ -1,4 +1,5 @@
 import * as AWS from "alchemy/AWS";
+import type { RuntimeContext } from "alchemy/RuntimeContext";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -20,7 +21,9 @@ type JobNotification = {
 export class JobNotifications extends Context.Service<
   JobNotifications,
   {
-    notifyJobCreated(job: Job): Effect.Effect<void, NotifyJobError>;
+    notifyJobCreated(
+      job: Job,
+    ): Effect.Effect<void, NotifyJobError, RuntimeContext>;
   }
 >()("JobNotifications") {}
 

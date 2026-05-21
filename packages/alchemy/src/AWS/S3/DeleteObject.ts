@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Bucket } from "./Bucket.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DeleteObjectRequest extends Omit<
   S3.DeleteObjectRequest,
@@ -18,7 +19,11 @@ export class DeleteObject extends Binding.Service<
   ) => Effect.Effect<
     (
       request: DeleteObjectRequest,
-    ) => Effect.Effect<S3.DeleteObjectOutput, S3.DeleteObjectError>
+    ) => Effect.Effect<
+      S3.DeleteObjectOutput,
+      S3.DeleteObjectError,
+      RuntimeContext
+    >
   >
 >()("AWS.S3.DeleteObject") {}
 

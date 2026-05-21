@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { DBCluster } from "../RDS/DBCluster.ts";
 import type { Secret } from "../SecretsManager/Secret.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface BeginTransactionOptions {
   secret: Secret;
@@ -23,7 +24,8 @@ export class BeginTransaction extends Binding.Service<
   ) => Effect.Effect<
     () => Effect.Effect<
       rdsdata.BeginTransactionResponse,
-      rdsdata.BeginTransactionError
+      rdsdata.BeginTransactionError,
+      RuntimeContext
     >
   >
 >()("AWS.RDSData.BeginTransaction") {}

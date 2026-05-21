@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Stream } from "./Stream.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetShardIteratorRequest extends Omit<
   Kinesis.GetShardIteratorInput,
@@ -19,7 +20,8 @@ export class GetShardIterator extends Binding.Service<
       request: GetShardIteratorRequest,
     ) => Effect.Effect<
       Kinesis.GetShardIteratorOutput,
-      Kinesis.GetShardIteratorError
+      Kinesis.GetShardIteratorError,
+      RuntimeContext
     >
   >
 >()("AWS.Kinesis.GetShardIterator") {}

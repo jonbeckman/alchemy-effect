@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { AlarmResource } from "./binding-common.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeAlarmContributorsRequest extends Omit<
   cloudwatch.DescribeAlarmContributorsInput,
@@ -22,7 +23,8 @@ export class DescribeAlarmContributors extends Binding.Service<
       request?: DescribeAlarmContributorsRequest,
     ) => Effect.Effect<
       cloudwatch.DescribeAlarmContributorsOutput,
-      cloudwatch.DescribeAlarmContributorsError
+      cloudwatch.DescribeAlarmContributorsError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.DescribeAlarmContributors") {}

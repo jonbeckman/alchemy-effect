@@ -6,6 +6,7 @@ import * as Binding from "../../Binding.ts";
 import { AWSEnvironment } from "../Environment.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { EventBus } from "./EventBus.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface PutEventsRequest extends Omit<
   eventbridge.PutEventsRequest,
@@ -23,7 +24,8 @@ export class PutEvents extends Binding.Service<
       request: PutEventsRequest,
     ) => Effect.Effect<
       eventbridge.PutEventsResponse,
-      eventbridge.PutEventsError
+      eventbridge.PutEventsError,
+      RuntimeContext
     >
   >
 >()("AWS.EventBridge.PutEvents") {}

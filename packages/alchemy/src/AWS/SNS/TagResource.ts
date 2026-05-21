@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface TagResourceRequest extends Omit<
   sns.TagResourceRequest,
@@ -17,7 +18,11 @@ export class TagResource extends Binding.Service<
   ) => Effect.Effect<
     (
       request: TagResourceRequest,
-    ) => Effect.Effect<sns.TagResourceResponse, sns.TagResourceError>
+    ) => Effect.Effect<
+      sns.TagResourceResponse,
+      sns.TagResourceError,
+      RuntimeContext
+    >
   >
 >()("AWS.SNS.TagResource") {}
 

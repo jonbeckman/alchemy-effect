@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeAnomalyDetectorsRequest
   extends cloudwatch.DescribeAnomalyDetectorsInput {}
@@ -17,7 +18,8 @@ export class DescribeAnomalyDetectors extends Binding.Service<
       request?: DescribeAnomalyDetectorsRequest,
     ) => Effect.Effect<
       cloudwatch.DescribeAnomalyDetectorsOutput,
-      cloudwatch.DescribeAnomalyDetectorsError
+      cloudwatch.DescribeAnomalyDetectorsError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.DescribeAnomalyDetectors") {}

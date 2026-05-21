@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import { type AlarmResource, sortAlarmResources } from "./binding-common.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 type AlarmResources = [AlarmResource, ...AlarmResource[]];
 
@@ -15,7 +16,11 @@ export class EnableAlarmActions extends Binding.Service<
   (
     ...alarms: AlarmResources
   ) => Effect.Effect<
-    () => Effect.Effect<cloudwatch.EnableAlarmActionsResponse, any>
+    () => Effect.Effect<
+      cloudwatch.EnableAlarmActionsResponse,
+      any,
+      RuntimeContext
+    >
   >
 >()("AWS.CloudWatch.EnableAlarmActions") {}
 

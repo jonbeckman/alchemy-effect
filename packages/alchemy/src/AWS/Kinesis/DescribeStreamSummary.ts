@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Stream } from "./Stream.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeStreamSummaryRequest extends Omit<
   Kinesis.DescribeStreamSummaryInput,
@@ -19,7 +20,8 @@ export class DescribeStreamSummary extends Binding.Service<
       request?: DescribeStreamSummaryRequest,
     ) => Effect.Effect<
       Kinesis.DescribeStreamSummaryOutput,
-      Kinesis.DescribeStreamSummaryError
+      Kinesis.DescribeStreamSummaryError,
+      RuntimeContext
     >
   >
 >()("AWS.Kinesis.DescribeStreamSummary") {}

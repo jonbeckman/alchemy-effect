@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeLimitsRequest extends Kinesis.DescribeLimitsInput {}
 
@@ -13,7 +14,8 @@ export class DescribeLimits extends Binding.Service<
       request?: DescribeLimitsRequest,
     ) => Effect.Effect<
       Kinesis.DescribeLimitsOutput,
-      Kinesis.DescribeLimitsError
+      Kinesis.DescribeLimitsError,
+      RuntimeContext
     >
   >
 >()("AWS.Kinesis.DescribeLimits") {}

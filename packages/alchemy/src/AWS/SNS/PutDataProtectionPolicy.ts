@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Topic } from "./Topic.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface PutDataProtectionPolicyRequest extends Omit<
   sns.PutDataProtectionPolicyInput,
@@ -19,7 +20,8 @@ export class PutDataProtectionPolicy extends Binding.Service<
       request: PutDataProtectionPolicyRequest,
     ) => Effect.Effect<
       sns.PutDataProtectionPolicyResponse,
-      sns.PutDataProtectionPolicyError
+      sns.PutDataProtectionPolicyError,
+      RuntimeContext
     >
   >
 >()("AWS.SNS.PutDataProtectionPolicy") {}

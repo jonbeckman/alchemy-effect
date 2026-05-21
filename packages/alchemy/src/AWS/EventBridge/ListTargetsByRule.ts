@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Rule } from "./Rule.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListTargetsByRuleRequest extends Omit<
   eventbridge.ListTargetsByRuleRequest,
@@ -19,7 +20,8 @@ export class ListTargetsByRule extends Binding.Service<
       request?: ListTargetsByRuleRequest,
     ) => Effect.Effect<
       eventbridge.ListTargetsByRuleResponse,
-      eventbridge.ListTargetsByRuleError
+      eventbridge.ListTargetsByRuleError,
+      RuntimeContext
     >
   >
 >()("AWS.EventBridge.ListTargetsByRule") {}

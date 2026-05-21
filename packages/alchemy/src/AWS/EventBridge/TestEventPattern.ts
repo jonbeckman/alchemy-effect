@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface TestEventPatternRequest
   extends eventbridge.TestEventPatternRequest {}
@@ -14,7 +15,8 @@ export class TestEventPattern extends Binding.Service<
       request: TestEventPatternRequest,
     ) => Effect.Effect<
       eventbridge.TestEventPatternResponse,
-      eventbridge.TestEventPatternError
+      eventbridge.TestEventPatternError,
+      RuntimeContext
     >
   >
 >()("AWS.EventBridge.TestEventPattern") {}

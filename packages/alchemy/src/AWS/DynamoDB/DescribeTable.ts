@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DescribeTableRequest extends Omit<
   DynamoDB.DescribeTableInput,
@@ -19,7 +20,8 @@ export class DescribeTable extends Binding.Service<
       request?: DescribeTableRequest,
     ) => Effect.Effect<
       DynamoDB.DescribeTableOutput,
-      DynamoDB.DescribeTableError
+      DynamoDB.DescribeTableError,
+      RuntimeContext
     >
   >
 >()("AWS.DynamoDB.DescribeTable") {}

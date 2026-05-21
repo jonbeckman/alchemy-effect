@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Stream } from "./Stream.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface PutRecordsRequest extends Omit<
   Kinesis.PutRecordsInput,
@@ -18,7 +19,11 @@ export class PutRecords extends Binding.Service<
   ) => Effect.Effect<
     (
       request: PutRecordsRequest,
-    ) => Effect.Effect<Kinesis.PutRecordsOutput, Kinesis.PutRecordsError>
+    ) => Effect.Effect<
+      Kinesis.PutRecordsOutput,
+      Kinesis.PutRecordsError,
+      RuntimeContext
+    >
   >
 >()("AWS.Kinesis.PutRecords") {}
 

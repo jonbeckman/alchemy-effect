@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Subscription } from "./Subscription.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ConfirmSubscriptionRequest extends Omit<
   sns.ConfirmSubscriptionInput,
@@ -19,7 +20,8 @@ export class ConfirmSubscription extends Binding.Service<
       request: ConfirmSubscriptionRequest,
     ) => Effect.Effect<
       sns.ConfirmSubscriptionResponse,
-      sns.ConfirmSubscriptionError
+      sns.ConfirmSubscriptionError,
+      RuntimeContext
     >
   >
 >()("AWS.SNS.ConfirmSubscription") {}

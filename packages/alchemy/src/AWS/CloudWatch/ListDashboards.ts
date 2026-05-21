@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListDashboardsRequest extends cloudwatch.ListDashboardsInput {}
 
@@ -16,7 +17,8 @@ export class ListDashboards extends Binding.Service<
       request?: ListDashboardsRequest,
     ) => Effect.Effect<
       cloudwatch.ListDashboardsOutput,
-      cloudwatch.ListDashboardsError
+      cloudwatch.ListDashboardsError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.ListDashboards") {}

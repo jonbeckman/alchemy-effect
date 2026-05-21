@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface DeleteItemRequest extends Omit<
   DynamoDB.DeleteItemInput,
@@ -17,7 +18,11 @@ export class DeleteItem extends Binding.Service<
   ) => Effect.Effect<
     (
       request: DeleteItemRequest,
-    ) => Effect.Effect<DynamoDB.DeleteItemOutput, DynamoDB.DeleteItemError>
+    ) => Effect.Effect<
+      DynamoDB.DeleteItemOutput,
+      DynamoDB.DeleteItemError,
+      RuntimeContext
+    >
   >
 >()("AWS.DynamoDB.DeleteItem") {}
 

@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { InsightRule } from "./InsightRule.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface GetInsightRuleReportRequest extends Omit<
   cloudwatch.GetInsightRuleReportInput,
@@ -22,7 +23,8 @@ export class GetInsightRuleReport extends Binding.Service<
       request: GetInsightRuleReportRequest,
     ) => Effect.Effect<
       cloudwatch.GetInsightRuleReportOutput,
-      cloudwatch.GetInsightRuleReportError
+      cloudwatch.GetInsightRuleReportError,
+      RuntimeContext
     >
   >
 >()("AWS.CloudWatch.GetInsightRuleReport") {}

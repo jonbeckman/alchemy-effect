@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Table } from "./Table.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface UpdateItemRequest extends Omit<
   DynamoDB.UpdateItemInput,
@@ -17,7 +18,11 @@ export class UpdateItem extends Binding.Service<
   ) => Effect.Effect<
     (
       request: UpdateItemRequest,
-    ) => Effect.Effect<DynamoDB.UpdateItemOutput, DynamoDB.UpdateItemError>
+    ) => Effect.Effect<
+      DynamoDB.UpdateItemOutput,
+      DynamoDB.UpdateItemError,
+      RuntimeContext
+    >
   >
 >()("AWS.DynamoDB.UpdateItem") {}
 

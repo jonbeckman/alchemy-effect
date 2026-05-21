@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { DBCluster } from "../RDS/DBCluster.ts";
 import type { Secret } from "../SecretsManager/Secret.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface CommitTransactionOptions {
   secret: Secret;
@@ -28,7 +29,8 @@ export class CommitTransaction extends Binding.Service<
       request: CommitTransactionRequest,
     ) => Effect.Effect<
       rdsdata.CommitTransactionResponse,
-      rdsdata.CommitTransactionError
+      rdsdata.CommitTransactionError,
+      RuntimeContext
     >
   >
 >()("AWS.RDSData.CommitTransaction") {}

@@ -7,6 +7,7 @@ import {
   sortInsightRuleResources,
   type InsightRuleResource,
 } from "./binding-common.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 type InsightRules = [InsightRuleResource, ...InsightRuleResource[]];
 
@@ -18,7 +19,11 @@ export class DisableInsightRules extends Binding.Service<
   (
     ...rules: InsightRules
   ) => Effect.Effect<
-    () => Effect.Effect<cloudwatch.DisableInsightRulesOutput, any>
+    () => Effect.Effect<
+      cloudwatch.DisableInsightRulesOutput,
+      any,
+      RuntimeContext
+    >
   >
 >()("AWS.CloudWatch.DisableInsightRules") {}
 

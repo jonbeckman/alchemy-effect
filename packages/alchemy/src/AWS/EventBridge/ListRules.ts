@@ -7,6 +7,7 @@ import * as Output from "../../Output.ts";
 import { AWSEnvironment } from "../Environment.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { EventBus } from "./EventBus.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface ListRulesRequest extends Omit<
   eventbridge.ListRulesRequest,
@@ -22,7 +23,8 @@ export class ListRules extends Binding.Service<
       request?: ListRulesRequest,
     ) => Effect.Effect<
       eventbridge.ListRulesResponse,
-      eventbridge.ListRulesError
+      eventbridge.ListRulesError,
+      RuntimeContext
     >
   >
 >()("AWS.EventBridge.ListRules") {}

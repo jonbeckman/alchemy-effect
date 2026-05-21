@@ -5,6 +5,7 @@ import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { DBCluster } from "../RDS/DBCluster.ts";
 import type { Secret } from "../SecretsManager/Secret.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface BatchExecuteStatementOptions {
   secret: Secret;
@@ -30,7 +31,8 @@ export class BatchExecuteStatement extends Binding.Service<
       request: BatchExecuteStatementRequest,
     ) => Effect.Effect<
       rdsdata.BatchExecuteStatementResponse,
-      rdsdata.BatchExecuteStatementError
+      rdsdata.BatchExecuteStatementError,
+      RuntimeContext
     >
   >
 >()("AWS.RDSData.BatchExecuteStatement") {}

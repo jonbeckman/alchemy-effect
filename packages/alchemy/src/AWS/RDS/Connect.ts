@@ -11,6 +11,7 @@ import type { Secret } from "../SecretsManager/Secret.ts";
 import type { DBCluster } from "./DBCluster.ts";
 import type { DBProxy } from "./DBProxy.ts";
 import type { DBProxyEndpoint } from "./DBProxyEndpoint.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 type ConnectResource = DBCluster | DBProxy | DBProxyEndpoint;
 
@@ -42,7 +43,11 @@ export class Connect extends Binding.Service<
     resource: ConnectResource,
     options: ConnectOptions,
   ) => Effect.Effect<
-    Effect.Effect<ConnectionInfo, secretsmanager.GetSecretValueError>
+    Effect.Effect<
+      ConnectionInfo,
+      secretsmanager.GetSecretValueError,
+      RuntimeContext
+    >
   >
 >()("AWS.RDS.Connect") {}
 

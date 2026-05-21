@@ -6,6 +6,7 @@ import * as Binding from "../../Binding.ts";
 import * as Output from "../../Output.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Bucket } from "./Bucket.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 export interface CopyObjectRequest extends Omit<
   S3.CopyObjectRequest,
@@ -19,7 +20,7 @@ export class CopyObject extends Binding.Service<
   ) => Effect.Effect<
     (
       request: CopyObjectRequest,
-    ) => Effect.Effect<S3.CopyObjectOutput, S3.CopyObjectError>
+    ) => Effect.Effect<S3.CopyObjectOutput, S3.CopyObjectError, RuntimeContext>
   >
 >()("AWS.S3.CopyObject") {}
 

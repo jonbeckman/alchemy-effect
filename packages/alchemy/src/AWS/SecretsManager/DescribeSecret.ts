@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Binding from "../../Binding.ts";
 import { isFunction } from "../Lambda/Function.ts";
 import type { Secret } from "./Secret.ts";
+import type { RuntimeContext } from "../../RuntimeContext.ts";
 
 /**
  * Runtime binding for `secretsmanager:DescribeSecret`.
@@ -15,7 +16,8 @@ export class DescribeSecret extends Binding.Service<
   ) => Effect.Effect<
     () => Effect.Effect<
       secretsmanager.DescribeSecretResponse,
-      secretsmanager.DescribeSecretError
+      secretsmanager.DescribeSecretError,
+      RuntimeContext
     >
   >
 >()("AWS.SecretsManager.DescribeSecret") {}
