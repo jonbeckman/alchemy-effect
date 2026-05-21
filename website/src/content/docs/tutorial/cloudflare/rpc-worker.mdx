@@ -6,81 +6,132 @@ sidebar:
 ---
 
 The [Effect RPC guide](/guides/effect-rpc) walks through the long-form
-`Cloudflare.Worker(...)` recipe: build the handler `Layer`, pipe it into
-`RpcServer.toHttpEffect`, return `{ fetch }`. Most of that is boilerplate
-that's identical for every RPC Worker. `Cloudflare.RpcWorker` is a thin
-sugar that takes the `RpcGroup` directly in props and wraps the
-`{ fetch }` shape for you.
+`Cloudflare.Worker(...)` recipe: build the handler `Layer`, pipe it
+into `RpcServer.toHttpEffect`, return `{ fetch }`. Most of that is
+identical for every RPC Worker. `Cloudflare.RpcWorker` takes the
+`RpcGroup` directly in props and wraps the `{ fetch }` shape for you.
 
-By the end of this tutorial you'll have:
-
-- a typed `RpcGroup` shared between server and clients,
-- a class-form `RpcWorker` serving it,
-- a second Worker calling the first via `RpcWorker.bind`.
-
-## Define the RPC group
-
-The schema lives outside any Worker so both the server and any consumer
-import the same value:
+## Declare a tagged error
 
 ```typescript
 // src/rpcs.ts
 import * as Schema from "effect/Schema";
-import { Rpc, RpcGroup } from "effect/unstable/rpc";
 
 export class TaskNotFound extends Schema.TaggedClass<TaskNotFound>()(
   "TaskNotFound",
   { id: Schema.String },
 ) {}
-
-const getTask = Rpc.make("getTask", {
-  payload: { id: Schema.String },
-  success: Schema.String,
-  error: TaskNotFound,
-});
-
-export class TaskRpcs extends RpcGroup.make(getTask) {}
 ```
 
-`Rpc.make` declares one procedure (name, payload, success, error
-schemas). `RpcGroup.make` collects them. Errors are schema-typed values,
-not HTTP status codes — clients pattern-match on them with
-`Effect.catchTag`.
+RPC errors are schema-typed values rather than HTTP status codes —
+clients pattern-match on them with `Effect.catchTag`.
 
-## Implement the Worker
+## Declare a procedure
 
-`Cloudflare.RpcWorker<Self>()(...)` is class-shaped just like
-`Cloudflare.Worker<Self>()(...)`. The only differences:
+```diff lang="typescript"
+ import * as Schema from "effect/Schema";
++import { Rpc } from "effect/unstable/rpc";
 
-- `props.schema` carries the `RpcGroup`,
-- the init Effect returns the **piped `RpcServer.toHttpEffect` Effect
-  directly** — no `{ fetch }` wrapper.
+ export class TaskNotFound extends Schema.TaggedClass<TaskNotFound>()(
+   "TaskNotFound",
+   { id: Schema.String },
+ ) {}
++
++const getTask = Rpc.make("getTask", {
++  payload: { id: Schema.String },
++  success: Schema.String,
++  error: TaskNotFound,
++});
+```
+
+Each `Rpc.make` declares one procedure: a name, a payload schema, a
+success schema, and an error schema.
+
+## Group procedures into an `RpcGroup`
+
+```diff lang="typescript"
+-import { Rpc } from "effect/unstable/rpc";
++import { Rpc, RpcGroup } from "effect/unstable/rpc";
+
+ // ...
+
++export class TaskRpcs extends RpcGroup.make(getTask) {}
+```
+
+`TaskRpcs` is a single value the server, the client, and any tests
+all import. Both ends share the same schema.
+
+## Define the Worker
 
 ```typescript
 // src/worker.ts
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { TaskRpcs } from "./rpcs.ts";
 
 export default class Worker extends Cloudflare.RpcWorker<Worker>()(
   "Worker",
   { main: import.meta.filename, schema: TaskRpcs },
   Effect.gen(function* () {
-    const handlers = TaskRpcs.toLayer({
-      getTask: ({ id }) => Effect.succeed(`task-${id}`),
-    });
-    return RpcServer.toHttpEffect(TaskRpcs).pipe(
-      Effect.provide(Layer.mergeAll(handlers, RpcSerialization.layerJson)),
-    );
+    return Effect.succeed(undefined as never);
   }),
 ) {}
 ```
 
-`RpcSerialization.layerJson` is fine for plain RPCs. Switch to
-`RpcSerialization.layerNdjson` if any procedure in the group is a
-streaming RPC — newline framing is required on the wire.
+`Cloudflare.RpcWorker<Self>()(...)` is class-shaped just like
+`Cloudflare.Worker<Self>()(...)`. The only new prop is `schema`,
+which carries the `RpcGroup`. The init body is a placeholder for now.
+
+## Wire the handlers
+
+```diff lang="typescript"
+ import * as Cloudflare from "alchemy/Cloudflare";
+ import * as Effect from "effect/Effect";
+ import { TaskRpcs } from "./rpcs.ts";
+
+ export default class Worker extends Cloudflare.RpcWorker<Worker>()(
+   "Worker",
+   { main: import.meta.filename, schema: TaskRpcs },
+   Effect.gen(function* () {
+-    return Effect.succeed(undefined as never);
++    const handlers = TaskRpcs.toLayer({
++      getTask: ({ id }) => Effect.succeed(`task-${id}`),
++    });
+   }),
+ ) {}
+```
+
+`TaskRpcs.toLayer({ getTask: ... })` is type-checked against the
+group — every procedure must be implemented, with the right payload
+and return type.
+
+## Return the piped Effect
+
+```diff lang="typescript"
+ import * as Cloudflare from "alchemy/Cloudflare";
+ import * as Effect from "effect/Effect";
++import * as Layer from "effect/Layer";
++import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+ import { TaskRpcs } from "./rpcs.ts";
+
+ export default class Worker extends Cloudflare.RpcWorker<Worker>()(
+   "Worker",
+   { main: import.meta.filename, schema: TaskRpcs },
+   Effect.gen(function* () {
+     const handlers = TaskRpcs.toLayer({
+       getTask: ({ id }) => Effect.succeed(`task-${id}`),
+     });
++    return RpcServer.toHttpEffect(TaskRpcs).pipe(
++      Effect.provide(Layer.mergeAll(handlers, RpcSerialization.layerJson)),
++    );
+   }),
+ ) {}
+```
+
+The init returns the **piped `RpcServer.toHttpEffect` Effect
+directly** — no `{ fetch }` wrapper. Use `RpcSerialization.layerNdjson`
+instead of `layerJson` if any procedure in the group is a streaming
+RPC; newline framing is required on the wire.
 
 ## Deploy the Worker
 
@@ -105,53 +156,56 @@ Yielding the class returns the underlying `Worker` resource, so
 `worker.url` / `worker.workerName` work the same as a plain
 `Cloudflare.Worker`.
 
-## Call it from another Worker
+## Bind it from another Worker
 
-`Cloudflare.RpcWorker.bind(WorkerClass)` mirrors `R2Bucket.bind` /
-`KVNamespace.bind`. It auto-registers the service binding on the
-surrounding Worker and returns a typed `RpcClient` for the bound
-schema:
+```diff lang="typescript"
+ // src/caller.ts
+ import * as Cloudflare from "alchemy/Cloudflare";
+ import * as Effect from "effect/Effect";
++import TaskWorker from "./worker.ts";
 
-```typescript
-// src/caller.ts
-import * as Cloudflare from "alchemy/Cloudflare";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
-import { CallerRpcs } from "./caller-rpcs.ts";
-import TaskWorker from "./worker.ts";
-
-export default class Caller extends Cloudflare.RpcWorker<Caller>()(
-  "Caller",
-  { main: import.meta.filename, schema: CallerRpcs },
-  Effect.gen(function* () {
-    const tasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
-    const handlers = CallerRpcs.toLayer({
-      proxyGetTask: ({ id }) => tasks.getTask({ id }),
-    });
-    return RpcServer.toHttpEffect(CallerRpcs).pipe(
-      Effect.provide(Layer.mergeAll(handlers, RpcSerialization.layerJson)),
-    );
-  }),
-) {}
+ export default class Caller extends Cloudflare.RpcWorker<Caller>()(
+   "Caller",
+   { main: import.meta.filename, schema: CallerRpcs },
+   Effect.gen(function* () {
++    const tasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
+   }),
+ ) {}
 ```
 
-`tasks.getTask({ id })` is fully typed against the bound Worker's
-schema — the success type is `string`, the error channel includes
-`TaskNotFound`. The call goes over the in-account service binding,
-not the public network.
+`Cloudflare.RpcWorker.bind(WorkerClass)` mirrors `R2Bucket.bind` /
+`KVNamespace.bind` — it auto-registers the service binding on the
+surrounding Worker and returns a typed `RpcClient` for the bound
+schema.
+
+## Call the bound worker from a handler
+
+```diff lang="typescript"
+ export default class Caller extends Cloudflare.RpcWorker<Caller>()(
+   "Caller",
+   { main: import.meta.filename, schema: CallerRpcs },
+   Effect.gen(function* () {
+     const tasks = yield* Cloudflare.RpcWorker.bind(TaskWorker);
++    const handlers = CallerRpcs.toLayer({
++      proxyGetTask: ({ id }) => tasks.getTask({ id }),
++    });
+   }),
+ ) {}
+```
+
+`tasks.getTask({ id })` is fully typed against `TaskWorker`'s
+schema — success type `string`, error channel includes `TaskNotFound`.
+The call goes over the in-account service binding, not the public
+internet.
 
 :::caution[Build a fresh client per request]
 `yield* Cloudflare.RpcWorker.bind(...)` runs **inside the per-request
 init**, not the outer Layer init. Cloudflare rejects I/O objects
 created on a previous request — caching the client across requests
-will fail with `"Cannot perform I/O on behalf of a different request"`.
+fails with `"Cannot perform I/O on behalf of a different request"`.
 :::
 
 ## Call it from a script
-
-The same `RpcGroup` value drives a fully typed client outside any
-Worker — useful for tests, CLIs, or migration scripts:
 
 ```typescript
 import * as Effect from "effect/Effect";
@@ -178,13 +232,16 @@ Effect.runPromise(
 );
 ```
 
+The same `TaskRpcs` value drives a fully typed client outside any
+Worker — useful for tests, CLIs, or migration scripts.
+
 ## Recap
 
 - `Cloudflare.RpcWorker` keeps everything from
   [Effect RPC](/guides/effect-rpc) — same schema, same handlers,
   same client — and removes the `{ fetch }` wrapper.
-- `props.schema` declares the served `RpcGroup`; the init Effect
-  returns the piped `RpcServer.toHttpEffect(schema)` Effect directly.
-- `Cloudflare.RpcWorker.bind(WorkerClass)` returns a typed RPC
-  client, scoped to the current request, that travels over the
-  service binding rather than the public internet.
+- `props.schema` declares the served `RpcGroup`; the init returns the
+  piped `RpcServer.toHttpEffect(schema)` Effect directly.
+- `Cloudflare.RpcWorker.bind(WorkerClass)` returns a typed RPC client
+  scoped to the current request that travels over the service
+  binding.
