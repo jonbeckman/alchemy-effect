@@ -120,7 +120,6 @@ export default class Worker extends Cloudflare.Worker<Worker>()(
   "Api",
   {
     main: import.meta.path,
-    compatibility: { date: "2026-03-17" },
   },
   Effect.gen(function* () {
     const artifacts = yield* Cloudflare.Artifacts.bind(Repos);
