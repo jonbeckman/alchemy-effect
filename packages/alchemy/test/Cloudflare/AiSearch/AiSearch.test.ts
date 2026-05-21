@@ -11,6 +11,7 @@ import * as Schedule from "effect/Schedule";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { Bucket } from "./fixtures/bucket.ts";
 import { Search, Token } from "./fixtures/search.ts";
+import { WorkerAsync } from "./fixtures/worker-async.ts";
 import AiSearchTestWorker from "./fixtures/worker.ts";
 
 const { test, beforeAll, afterAll, deploy, destroy } = Test.make({
@@ -107,9 +108,11 @@ const Stack = Alchemy.Stack(
     yield* Token;
     const search = yield* Search;
     const worker = yield* AiSearchTestWorker;
+    const workerAsync = yield* WorkerAsync;
     return {
       instanceName: search.instanceName,
       url: worker.url.as<string>(),
+      asyncUrl: workerAsync.url.as<string>(),
     };
   }),
 );
@@ -130,6 +133,37 @@ test(
         res.status === 200
           ? Effect.succeed(res)
           : Effect.fail(new Error(`Worker not ready: ${res.status}`)),
+      ),
+      Effect.retry({
+        schedule: Schedule.exponential("500 millis"),
+        times: 15,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (yield* res.json) as { id: string };
+    expect(body.id).toBe(out.instanceName);
+  }).pipe(logLevel),
+  { timeout: 300_000 },
+);
+
+// Async (non-Effect) worker exercising `Cloudflare.InferEnv`. The handler at
+// fixtures/worker-async-handler.ts reads `env.Search` — typed as
+// `AiSearchInstance` via `Cloudflare.InferEnv<typeof WorkerAsync>` — and
+// calls `.info()`. tsc passing on the fixture already proves the type
+// inference; the deploy-and-fetch test verifies the runtime binding shape
+// matches.
+test(
+  "deployed async worker round-trips AiSearch via InferEnv",
+  Effect.gen(function* () {
+    const out = yield* stack;
+    expect(out.asyncUrl).toBeTypeOf("string");
+
+    const client = yield* HttpClient.HttpClient;
+    const res = yield* client.get(`${out.asyncUrl}/`).pipe(
+      Effect.flatMap((res) =>
+        res.status === 200
+          ? Effect.succeed(res)
+          : Effect.fail(new Error(`Async worker not ready: ${res.status}`)),
       ),
       Effect.retry({
         schedule: Schedule.exponential("500 millis"),

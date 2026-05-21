@@ -4,6 +4,7 @@ import * as Binding from "../../Binding.ts";
 import type { Rpc } from "../../Rpc.ts";
 import { isYieldableEffectLike } from "../../Util/effect.ts";
 import type { AiGateway } from "../AiGateway/AiGateway.ts";
+import type { AiSearch } from "../AiSearch/AiSearch.ts";
 import { AnalyticsEngineDataset } from "../AnalyticsEngine/AnalyticsEngineDataset.ts";
 import { Artifacts } from "../Artifacts/Artifacts.ts";
 import type { D1Database } from "../D1/D1Database.ts";
@@ -35,6 +36,7 @@ export type WorkerBindingResource =
   | KVNamespace
   | Queue
   | AiGateway
+  | AiSearch
   | AnalyticsEngineDataset
   | SendEmail
   | Artifacts

@@ -33,21 +33,23 @@ export type GetBindingType<T> =
                 ? Queue<unknown>
                 : T extends Cloudflare.AiGateway
                   ? Ai
-                  : T extends Cloudflare.SendEmail
-                    ? SendEmail
-                    : T extends Cloudflare.AnalyticsEngineDataset
-                      ? AnalyticsEngineDataset
-                      : T extends Cloudflare.Artifacts
-                        ? Artifacts
-                        : T extends Cloudflare.Images
-                          ? ImagesBinding
-                          : T extends Cloudflare.Hyperdrive
-                            ? Hyperdrive
-                            : T extends Cloudflare.DurableObjectNamespaceLike
-                              ? DurableObjectNamespace<
-                                  Exclude<T["Shape"], undefined>
-                                >
-                              : T;
+                  : T extends Cloudflare.AiSearch
+                    ? AiSearchInstance
+                    : T extends Cloudflare.SendEmail
+                      ? SendEmail
+                      : T extends Cloudflare.AnalyticsEngineDataset
+                        ? AnalyticsEngineDataset
+                        : T extends Cloudflare.Artifacts
+                          ? Artifacts
+                          : T extends Cloudflare.Images
+                            ? ImagesBinding
+                            : T extends Cloudflare.Hyperdrive
+                              ? Hyperdrive
+                              : T extends Cloudflare.DurableObjectNamespaceLike
+                                ? DurableObjectNamespace<
+                                    Exclude<T["Shape"], undefined>
+                                  >
+                                : T;
 
 /**
  * Cloudflare service-binding wire shape for an Effect-native Worker.

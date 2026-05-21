@@ -118,20 +118,30 @@ export const bindWorkerAsyncBindings = Effect.fnUntraced(function* (
                                       type: "ai",
                                       name: bindingName,
                                     }
-                                  : binding.Type === "Cloudflare.Hyperdrive"
-                                    ? {
-                                        type: "hyperdrive",
+                                  : binding.Type === "Cloudflare.AiSearch"
+                                    ? // `ai_search` is a valid binding type
+                                      // (see AiSearchBinding.ts) but missing
+                                      // from PutScriptRequest in distilled
+                                      // v0.21.3 — cast until SDK regenerates.
+                                      ({
+                                        type: "ai_search",
                                         name: bindingName,
-                                        id: binding.hyperdriveId,
-                                      }
-                                    : isWorker(binding)
+                                        instanceName: binding.instanceName,
+                                      } as any)
+                                    : binding.Type === "Cloudflare.Hyperdrive"
                                       ? {
-                                          type: "service",
+                                          type: "hyperdrive",
                                           name: bindingName,
-                                          service: binding.workerName,
+                                          id: binding.hyperdriveId,
                                         }
-                                      : // TODO(sam): handle others
-                                        undefined;
+                                      : isWorker(binding)
+                                        ? {
+                                            type: "service",
+                                            name: bindingName,
+                                            service: binding.workerName,
+                                          }
+                                        : // TODO(sam): handle others
+                                          undefined;
 
       if (bindingMeta) {
         yield* resource.bind`${bindingName}`({
