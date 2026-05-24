@@ -456,23 +456,112 @@ function firstParagraph(value: string): string {
   return para.replace(/\s+/g, " ").trim();
 }
 
+interface ResolvedLink {
+  target: string;
+  display: string | undefined;
+  isUrl: boolean;
+}
+
+function resolveJsdocLink(body: string): ResolvedLink {
+  const trimmed = body.trim();
+  const pipeIdx = trimmed.indexOf("|");
+  if (pipeIdx !== -1) {
+    const target = trimmed.slice(0, pipeIdx).trim();
+    const display = trimmed.slice(pipeIdx + 1).trim() || undefined;
+    return { target, display, isUrl: /^https?:\/\//i.test(target) };
+  }
+  const match = trimmed.match(/^(\S+)(?:\s+([\s\S]+))?$/);
+  if (!match) return { target: trimmed, display: undefined, isUrl: false };
+  const target = match[1];
+  const display = match[2]?.trim() || undefined;
+  return { target, display, isUrl: /^https?:\/\//i.test(target) };
+}
+
+/**
+ * Render `{@link …}` into Markdown:
+ *   {@link URL | text} | {@link URL text}  → [text](URL)
+ *   {@link URL}                            → <URL>
+ *   {@link Symbol text}                    → text
+ *   {@link Symbol}                         → `Symbol`
+ *   {@link Symbol#member}                  → `Symbol.member`
+ */
+function convertJsdocLinksToMarkdown(text: string): string {
+  return text.replace(/\{@link\s+([^}]+)\}/g, (_match, body: string) => {
+    const { target, display, isUrl } = resolveJsdocLink(body);
+    if (isUrl) {
+      return display ? `[${display}](${target})` : `<${target}>`;
+    }
+    if (display) return display;
+    return `\`${target.replace(/#/g, ".")}\``;
+  });
+}
+
+/** Render `{@link …}` into plain text suitable for the YAML meta description. */
+function convertJsdocLinksToText(text: string): string {
+  return text.replace(/\{@link\s+([^}]+)\}/g, (_match, body: string) => {
+    const { target, display, isUrl } = resolveJsdocLink(body);
+    if (display) return display;
+    if (isUrl) return target;
+    return target.replace(/#/g, ".");
+  });
+}
+
+/**
+ * Apply a string transform to text outside fenced code blocks. Buffers
+ * contiguous non-fence regions so multi-line constructs like `{@link …}`
+ * spanning a soft wrap are still matched.
+ */
+function transformOutsideCodeFences(
+  text: string,
+  fn: (chunk: string) => string,
+): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let buffer: string[] = [];
+  let inFence = false;
+  const flush = () => {
+    if (buffer.length === 0) return;
+    out.push(fn(buffer.join("\n")));
+    buffer = [];
+  };
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      flush();
+      out.push(line);
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      out.push(line);
+    } else {
+      buffer.push(line);
+    }
+  }
+  flush();
+  return out.join("\n");
+}
+
+function renderProse(text: string): string {
+  return transformOutsideCodeFences(text, convertJsdocLinksToMarkdown);
+}
+
 function renderPageBody(doc: PageDoc): string {
   const parts: string[] = [];
 
   if (doc.summary) {
-    parts.push(doc.summary);
+    parts.push(renderProse(doc.summary));
   }
 
   for (const section of doc.sections) {
     const secParts = [`## ${section.title}`];
     if (section.description) {
-      secParts.push(section.description);
+      secParts.push(renderProse(section.description));
     }
     for (const example of section.examples) {
       if (section.examples.length > 1) {
         secParts.push(`**${example.title}**`);
       }
-      secParts.push(example.body);
+      secParts.push(renderProse(example.body));
     }
     parts.push(secParts.join("\n\n"));
   }
@@ -483,7 +572,8 @@ function renderPageBody(doc: PageDoc): string {
 function renderPage(doc: PageDoc): string {
   const sourcePath = `src/${normalizeSlashes(doc.relativePath)}`;
   const description =
-    firstParagraph(doc.summary) || `API reference for ${doc.title}`;
+    convertJsdocLinksToText(firstParagraph(doc.summary)) ||
+    `API reference for ${doc.title}`;
   const frontmatter = [
     "---",
     `title: ${yamlString(doc.title)}`,
