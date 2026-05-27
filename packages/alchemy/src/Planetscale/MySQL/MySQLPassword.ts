@@ -293,7 +293,7 @@ export const MySQLPasswordProvider = () =>
           // Identifiers — stable across update (diff replaces on
           // database/branch changes), so we can pull from `output` first
           // and fall back to `news` for greenfield.
-          const { organization: envOrg } = yield* Credentials;
+          const { organization: envOrg } = yield* yield* Credentials;
           const organization =
             output?.organization ?? resolveDatabaseOrg(news.database) ?? envOrg;
           const databaseName =

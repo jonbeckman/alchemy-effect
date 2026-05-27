@@ -177,7 +177,7 @@ export const PostgresDefaultRoleProvider = () =>
         }),
 
         reconcile: Effect.fn(function* ({ news, output }) {
-          const { organization: envOrg } = yield* Credentials;
+          const { organization: envOrg } = yield* yield* Credentials;
           const organization = resolveDatabaseOrg(news.database) ?? envOrg;
           const databaseName = resolveDatabaseName(news.database);
           const branchName = resolveBranchName(news.branch);

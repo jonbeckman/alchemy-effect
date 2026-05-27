@@ -1,4 +1,8 @@
 import * as ops from "@distilled.cloud/planetscale/Operations";
+import {
+  Credentials as PsCredentials,
+  fromOAuth,
+} from "@distilled.cloud/planetscale/Credentials";
 import * as Console from "effect/Console";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -7,11 +11,6 @@ import * as Match from "effect/Match";
 import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import {
-  Credentials as PsCredentials,
-  DEFAULT_API_BASE_URL,
-} from "@distilled.cloud/planetscale/Credentials";
 import {
   AuthError,
   AuthProviderLayer,
@@ -31,16 +30,6 @@ import * as OAuthClient from "./OAuthClient.ts";
  * up the PlanetScale {@link AuthProvider} from inside provider Layers.
  */
 export const PLANETSCALE_AUTH_PROVIDER_NAME = "Planetscale";
-
-/**
- * Sentinel value placed in {@link PsCredentials} `tokenId` when OAuth is in
- * use. The PlanetScale HttpClient middleware in `Credentials.ts` detects this
- * sentinel and rewrites the Authorization header from `${tokenId}:${token}`
- * to `Bearer ${token}` so requests authenticate as an OAuth user instead of
- * a service token.
- */
-export const PLANETSCALE_OAUTH_TOKEN_ID_MARKER =
-  "__alchemy_planetscale_oauth__";
 
 const options: Array<{
   value: PlanetscaleAuthConfig["method"];
@@ -185,55 +174,28 @@ export const ALL_SCOPES: Record<string, string> = {
 };
 
 /**
- * Provide a Layer that lets the distilled SDK resolve PlanetScale calls
- * authenticated with an OAuth access token. Sets the sentinel token id so
- * the HttpClient middleware in `Credentials.ts` rewrites the Authorization
- * header to `Bearer <access_token>`.
- *
- * Used during OAuth configuration to call `listOrganizations` before we
- * have a persisted organization slug.
+ * Build a one-off PlanetScale Credentials + HttpClient layer wrapping an
+ * OAuth access token. Used by `configureOAuth` to list the user's
+ * organizations after the device-flow login.
  */
 const withOAuthCredentials = <A, E>(
   accessToken: string,
   effect: Effect.Effect<A, E, PsCredentials | HttpClient.HttpClient>,
-): Effect.Effect<A, E> => {
-  const credentialsLayer = Layer.succeed(PsCredentials, {
-    tokenId: Redacted.make(PLANETSCALE_OAUTH_TOKEN_ID_MARKER),
-    token: Redacted.make(accessToken),
-    organization: "",
-    apiBaseUrl: DEFAULT_API_BASE_URL,
-  });
-  const httpLayer = planetscaleHttpClientLayer.pipe(
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provideMerge(credentialsLayer),
+): Effect.Effect<A, E> =>
+  Effect.provide(
+    effect,
+    Layer.mergeAll(
+      fromOAuth({
+        load: Effect.succeed({
+          accessToken,
+          organization: "",
+        }),
+        refresh: () =>
+          Effect.die("refresh not expected during organization selection"),
+      }),
+      FetchHttpClient.layer,
+    ),
   );
-  return Effect.provide(effect, httpLayer);
-};
-
-/**
- * HttpClient layer that rewrites the Authorization header to `Bearer <token>`
- * whenever the resolved PlanetScale credentials carry the OAuth sentinel
- * token id. For service-token credentials the request passes through
- * unchanged.
- *
- * Wired into `Planetscale.providers()` in place of the raw FetchHttpClient
- * layer so every distilled-SDK call respects whichever auth method the
- * resolved profile selected.
- */
-export const planetscaleHttpClientLayer = Layer.effect(
-  HttpClient.HttpClient,
-  Effect.gen(function* () {
-    const inner = yield* HttpClient.HttpClient;
-    const creds = yield* PsCredentials;
-    if (Redacted.value(creds.tokenId) !== PLANETSCALE_OAUTH_TOKEN_ID_MARKER) {
-      return inner;
-    }
-    const bearer = `Bearer ${Redacted.value(creds.token)}`;
-    return HttpClient.mapRequest(inner, (req) =>
-      HttpClientRequest.setHeader(req, "Authorization", bearer),
-    );
-  }),
-);
 
 const selectOrganization = (accessToken: string) =>
   Effect.gen(function* () {

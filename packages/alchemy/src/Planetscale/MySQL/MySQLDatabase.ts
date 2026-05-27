@@ -215,7 +215,7 @@ export const MySQLDatabaseProvider = () =>
         }),
 
         read: Effect.fn(function* ({ id, output, olds }) {
-          const { organization } = yield* Credentials;
+          const { organization } = yield* yield* Credentials;
           const databaseName =
             output?.name ?? (yield* createDatabaseName(id, olds?.name));
           return yield* getDb({
@@ -269,7 +269,7 @@ export const MySQLDatabaseProvider = () =>
         }),
 
         reconcile: Effect.fn(function* ({ id, news, output, session }) {
-          const { organization } = yield* Credentials;
+          const { organization } = yield* yield* Credentials;
           const newName = yield* createDatabaseName(id, news.name);
           const clusterSize = news.clusterSize;
 

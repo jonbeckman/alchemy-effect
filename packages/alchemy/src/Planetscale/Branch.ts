@@ -244,7 +244,7 @@ export const makeBranchProvider = <R extends ResourceLike>(opts: {
           const dbInfo = output
             ? { name: output.database, organization: output.organization }
             : resolveDatabase(olds.database);
-          const { organization: envOrg } = yield* Credentials;
+          const { organization: envOrg } = yield* yield* Credentials;
           const organization =
             output?.organization ?? dbInfo.organization ?? envOrg;
           const databaseName = output?.database ?? dbInfo.name;
@@ -281,7 +281,7 @@ export const makeBranchProvider = <R extends ResourceLike>(opts: {
         }),
 
         reconcile: Effect.fn(function* ({ id, news, output, session }: any) {
-          const { organization: envOrg } = yield* Credentials;
+          const { organization: envOrg } = yield* yield* Credentials;
           const dbInfo = resolveDatabase(news.database);
           const organization =
             output?.organization ?? dbInfo.organization ?? envOrg;

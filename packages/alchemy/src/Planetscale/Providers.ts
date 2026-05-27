@@ -4,7 +4,7 @@ import { CredentialsStoreLive } from "../Auth/Credentials.ts";
 import { ProfileLive } from "../Auth/Profile.ts";
 import * as Provider from "../Provider.ts";
 import type { StackServices } from "../Stack.ts";
-import { PlanetscaleAuth, planetscaleHttpClientLayer } from "./AuthProvider.ts";
+import { PlanetscaleAuth } from "./AuthProvider.ts";
 import * as Credentials from "./Credentials.ts";
 import { MySQLBranch, MySQLBranchProvider } from "./MySQL/MySQLBranch.ts";
 import { MySQLDatabase, MySQLDatabaseProvider } from "./MySQL/MySQLDatabase.ts";
@@ -71,11 +71,6 @@ export const providers = (): Layer.Layer<
         PostgresDefaultRoleProvider(),
       ),
     ),
-    // The HttpClient middleware reads the resolved Credentials to decide
-    // whether to rewrite the Authorization header for OAuth, so it must be
-    // composed AFTER `fromAuthProvider()` in the pipe — Layer.provideMerge
-    // resolves later entries first.
-    Layer.provideMerge(planetscaleHttpClientLayer),
     Layer.provideMerge(Credentials.fromAuthProvider()),
     Layer.provideMerge(FetchHttpClient.layer),
     Layer.provideMerge(PlanetscaleAuth),
