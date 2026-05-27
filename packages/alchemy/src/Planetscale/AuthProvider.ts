@@ -1,7 +1,17 @@
+import * as ops from "@distilled.cloud/planetscale/Operations";
 import * as Console from "effect/Console";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
 import * as Redacted from "effect/Redacted";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import {
+  Credentials as PsCredentials,
+  DEFAULT_API_BASE_URL,
+} from "@distilled.cloud/planetscale/Credentials";
 import {
   AuthError,
   AuthProviderLayer,
@@ -14,6 +24,7 @@ import {
   retryOnce,
 } from "../Auth/Env.ts";
 import * as Clank from "../Util/Clank.ts";
+import * as OAuthClient from "./OAuthClient.ts";
 
 /**
  * Canonical name registered in {@link AuthProviders}. Use this key to look
@@ -21,11 +32,26 @@ import * as Clank from "../Util/Clank.ts";
  */
 export const PLANETSCALE_AUTH_PROVIDER_NAME = "Planetscale";
 
+/**
+ * Sentinel value placed in {@link PsCredentials} `tokenId` when OAuth is in
+ * use. The PlanetScale HttpClient middleware in `Credentials.ts` detects this
+ * sentinel and rewrites the Authorization header from `${tokenId}:${token}`
+ * to `Bearer ${token}` so requests authenticate as an OAuth user instead of
+ * a service token.
+ */
+export const PLANETSCALE_OAUTH_TOKEN_ID_MARKER =
+  "__alchemy_planetscale_oauth__";
+
 const options: Array<{
   value: PlanetscaleAuthConfig["method"];
   label: string;
   hint?: string;
 }> = [
+  {
+    value: "oauth",
+    label: "OAuth",
+    hint: "recommended — device-flow login with automatic token refresh",
+  },
   {
     value: "env",
     label: "Environment Variables",
@@ -36,24 +62,26 @@ const options: Array<{
     label: "Service Token",
     hint: "enter service token interactively, stored in ~/.alchemy/credentials",
   },
-  //todo(pear): add planetscale oauth
 ];
 
 /**
  * Auth configuration persisted in `~/.alchemy/profiles.json` for the
  * PlanetScale provider.
  *
+ * - `oauth`: PlanetScale OAuth device flow. Access and refresh tokens are
+ *   stored in `~/.alchemy/credentials/<profile>/planetscale-oauth.json` and
+ *   refreshed automatically on use.
  * - `env`: read credentials from environment variables at resolution time.
- * - `stored`: read credentials from `~/.alchemy/credentials/<profile>/planetscale-stored.json`.
- *
- * OAuth is intentionally not implemented because PlanetScale does not
- * publish a redirect-based OAuth client; service tokens are the canonical
- * credential.
+ * - `stored`: read service-token credentials from
+ *   `~/.alchemy/credentials/<profile>/planetscale-stored.json`.
  */
-export type PlanetscaleAuthConfig = { method: "env" } | { method: "stored" };
+export type PlanetscaleAuthConfig =
+  | { method: "env" }
+  | { method: "stored" }
+  | { method: "oauth"; scopes: string[]; organization: string };
 
 /**
- * apiToken credentials persisted to disk for `method: "stored"`.
+ * Service-token credentials persisted to disk for `method: "stored"`.
  * Stored under the file key `"planetscale-stored"`.
  */
 export interface PlanetscaleStoredCredentials {
@@ -67,16 +95,194 @@ export interface PlanetscaleStoredCredentials {
  * Resolved in-memory PlanetScale credentials returned by
  * {@link AuthProviderImpl.read}.
  */
-export interface PlanetscaleResolvedCredentials {
-  type: "apiToken";
-  tokenId: Redacted.Redacted<string>;
-  token: Redacted.Redacted<string>;
-  organization: string;
-  source: {
-    type: PlanetscaleAuthConfig["method"];
-    details?: string;
-  };
-}
+export type PlanetscaleResolvedCredentials =
+  | {
+      type: "apiToken";
+      tokenId: Redacted.Redacted<string>;
+      token: Redacted.Redacted<string>;
+      organization: string;
+      source: {
+        type: PlanetscaleAuthConfig["method"];
+        details?: string;
+      };
+    }
+  | {
+      type: "oauth";
+      accessToken: Redacted.Redacted<string>;
+      expires: number;
+      scopes: string[];
+      organization: string;
+      source: {
+        type: PlanetscaleAuthConfig["method"];
+        details?: string;
+      };
+    };
+
+/**
+ * Scopes alchemy requests by default. Cover the typical alchemy-managed
+ * resources: databases, branches, branch passwords, and postgres roles.
+ *
+ * @see https://planetscale.com/docs/api/reference/oauth-access-scopes
+ */
+export const DEFAULT_SCOPES = [
+  "read_user",
+  "read_organization",
+  "read_organizations",
+  "read_databases",
+  "create_databases",
+  "write_databases",
+  "delete_databases",
+  "read_branches",
+  "write_branches",
+  "delete_branches",
+  "promote_branches",
+  "delete_production_branches",
+  "manage_passwords",
+  "manage_production_branch_passwords",
+];
+
+/**
+ * Full set of OAuth scopes recognized by PlanetScale, grouped by what they
+ * grant access to. Used as the option list when the user customizes scopes
+ * during `alchemy login`.
+ */
+export const ALL_SCOPES: Record<string, string> = {
+  read_user: "Read user info",
+  write_user: "Write user info",
+  read_organizations: "List a user's organizations",
+  read_organization: "Read organization",
+  write_organization: "Write organization",
+  delete_organization: "Delete organization",
+  read_invoices: "Read organization invoices",
+  read_members: "Read organization members",
+  write_members: "Write organization members",
+  delete_members: "Delete organization members",
+  read_databases: "Read databases",
+  create_databases: "Create databases",
+  write_databases: "Write databases",
+  delete_databases: "Delete databases",
+  read_branches: "Read database branches",
+  write_branches: "Write database branches",
+  delete_branches: "Delete database branches",
+  promote_branches: "Promote database branches",
+  delete_production_branches: "Delete production branches",
+  manage_passwords: "Read, write, and delete branch passwords",
+  manage_production_branch_passwords:
+    "Read, write, and delete production branch passwords",
+  read_deploy_requests: "Read deploy requests",
+  write_deploy_requests: "Create and update deploy requests",
+  deploy_deploy_requests: "Deploy deploy requests",
+  approve_deploy_requests: "Approve deploy requests",
+  read_comments: "Read deploy request comments",
+  write_comments: "Create deploy request comments",
+  read_backups: "Read backups",
+  write_backups: "Create and update backups",
+  delete_backups: "Delete backups",
+  delete_production_branch_backups: "Delete production backups",
+  restore_backups: "Restore backups to new branches",
+  restore_production_branch_backups:
+    "Restore production branch backups to new branches",
+};
+
+/**
+ * Provide a Layer that lets the distilled SDK resolve PlanetScale calls
+ * authenticated with an OAuth access token. Sets the sentinel token id so
+ * the HttpClient middleware in `Credentials.ts` rewrites the Authorization
+ * header to `Bearer <access_token>`.
+ *
+ * Used during OAuth configuration to call `listOrganizations` before we
+ * have a persisted organization slug.
+ */
+const withOAuthCredentials = <A, E>(
+  accessToken: string,
+  effect: Effect.Effect<A, E, PsCredentials | HttpClient.HttpClient>,
+): Effect.Effect<A, E> => {
+  const credentialsLayer = Layer.succeed(PsCredentials, {
+    tokenId: Redacted.make(PLANETSCALE_OAUTH_TOKEN_ID_MARKER),
+    token: Redacted.make(accessToken),
+    organization: "",
+    apiBaseUrl: DEFAULT_API_BASE_URL,
+  });
+  const httpLayer = planetscaleHttpClientLayer.pipe(
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provideMerge(credentialsLayer),
+  );
+  return Effect.provide(effect, httpLayer);
+};
+
+/**
+ * HttpClient layer that rewrites the Authorization header to `Bearer <token>`
+ * whenever the resolved PlanetScale credentials carry the OAuth sentinel
+ * token id. For service-token credentials the request passes through
+ * unchanged.
+ *
+ * Wired into `Planetscale.providers()` in place of the raw FetchHttpClient
+ * layer so every distilled-SDK call respects whichever auth method the
+ * resolved profile selected.
+ */
+export const planetscaleHttpClientLayer = Layer.effect(
+  HttpClient.HttpClient,
+  Effect.gen(function* () {
+    const inner = yield* HttpClient.HttpClient;
+    const creds = yield* PsCredentials;
+    if (Redacted.value(creds.tokenId) !== PLANETSCALE_OAUTH_TOKEN_ID_MARKER) {
+      return inner;
+    }
+    const bearer = `Bearer ${Redacted.value(creds.token)}`;
+    return HttpClient.mapRequest(inner, (req) =>
+      HttpClientRequest.setHeader(req, "Authorization", bearer),
+    );
+  }),
+);
+
+const selectOrganization = (accessToken: string) =>
+  Effect.gen(function* () {
+    const list = yield* ops.listOrganizations;
+    const response = yield* list({});
+    const orgs = response.data;
+    if (orgs.length === 0) {
+      yield* new AuthError({
+        message: "Planetscale: no organizations found for this account.",
+      });
+    }
+    if (orgs.length === 1) {
+      const org = orgs[0]!;
+      yield* Clank.info(`Planetscale: using organization: ${org.name}`);
+      return org.name;
+    }
+    return yield* Clank.select({
+      message: "Select a Planetscale organization",
+      options: orgs.map((o) => ({
+        value: o.name,
+        label: o.name,
+        hint: o.plan,
+      })),
+    }).pipe(retryOnce);
+  }).pipe((e) => withOAuthCredentials(accessToken, e));
+
+const promptOAuthScopes = () =>
+  Clank.confirm({
+    message: "Customize OAuth scopes? (default covers typical use cases)",
+    initialValue: false,
+  }).pipe(
+    retryOnce,
+    Effect.flatMap((customize) => {
+      if (!customize) return Effect.succeed([...DEFAULT_SCOPES]);
+      return Clank.multiselect({
+        message: "Select OAuth scopes",
+        initialValues: DEFAULT_SCOPES as string[],
+        options: Object.entries(ALL_SCOPES).map(([value, hint]) => ({
+          value: value as string,
+          label: value,
+          hint,
+        })),
+        required: true,
+      }).pipe(
+        Effect.map((s) => s as string[]),
+        retryOnce,
+      );
+    }),
+  );
 
 /**
  * Layer that registers the PlanetScale {@link AuthProvider} into the
@@ -84,6 +290,8 @@ export interface PlanetscaleResolvedCredentials {
  * PlanetScale `providers()` layer so `alchemy login` can discover it.
  *
  * Supported methods:
+ * - `oauth`: device-flow login. Opens the verification URL in a browser
+ *   and polls until the user authorizes. Access tokens refresh on use.
  * - `env`: reads `PLANETSCALE_API_TOKEN_ID`/`PLANETSCALE_API_TOKEN`/`PLANETSCALE_ORGANIZATION`.
  * - `stored`: prompts for a service token interactively and writes it to
  *   `~/.alchemy/credentials/<profile>/planetscale-stored.json`.
@@ -95,6 +303,33 @@ export const PlanetscaleAuth = AuthProviderLayer<
   PLANETSCALE_AUTH_PROVIDER_NAME,
   Effect.gen(function* () {
     const store = yield* CredentialsStore;
+
+    const oauthLogin = (profileName: string, scopes: string[]) =>
+      Effect.gen(function* () {
+        const verification = yield* OAuthClient.requestDevice(scopes);
+
+        yield* Clank.info(
+          `Planetscale: open ${verification.verificationUri} and enter the code:`,
+        );
+        yield* Clank.info(`  ${verification.userCode}`);
+        const target =
+          verification.verificationUriComplete ?? verification.verificationUri;
+        yield* Clank.openUrl(target).pipe(
+          Effect.catch(() =>
+            Clank.warn(
+              "Planetscale: could not open browser automatically. Please open the URL above manually.",
+            ),
+          ),
+        );
+        yield* Clank.info(
+          `Planetscale: waiting for authorization (up to ${Duration.format(Duration.seconds(verification.expiresIn))})...`,
+        );
+
+        const credentials = yield* OAuthClient.pollForToken(verification);
+        yield* store.write(profileName, "planetscale-oauth", credentials);
+        yield* Clank.success("Planetscale: OAuth credentials saved.");
+        return credentials;
+      });
 
     const loginStored = Effect.fnUntraced(function* (profileName: string) {
       const tokenId = yield* Clank.text({
@@ -126,6 +361,28 @@ export const PlanetscaleAuth = AuthProviderLayer<
       return { method: "stored" as const };
     });
 
+    const configureOAuth = Effect.fnUntraced(function* (profileName: string) {
+      const scopes = yield* promptOAuthScopes();
+
+      const oauthCreds = yield* oauthLogin(profileName, scopes);
+
+      const organization = yield* selectOrganization(oauthCreds.access).pipe(
+        Effect.mapError(
+          (e) =>
+            new AuthError({
+              message: "Planetscale: could not list organizations",
+              cause: e,
+            }),
+        ),
+      );
+
+      return {
+        method: "oauth" as const,
+        scopes,
+        organization,
+      };
+    });
+
     const configureInteractive = (profileName: string) =>
       Clank.select({
         message: "Planetscale authentication method",
@@ -134,6 +391,7 @@ export const PlanetscaleAuth = AuthProviderLayer<
         Effect.flatMap((method) =>
           Match.value(method).pipe(
             Match.when("env", () => Effect.succeed({ method: "env" as const })),
+            Match.when("oauth", () => configureOAuth(profileName)),
             Match.when("stored", () => loginStored(profileName)),
             Match.exhaustive,
           ),
@@ -214,6 +472,49 @@ export const PlanetscaleAuth = AuthProviderLayer<
               ),
             ),
         ),
+        Match.when({ method: "oauth" }, (cfg) =>
+          Effect.gen(function* () {
+            const creds = yield* store.read<OAuthClient.OAuthCredentials>(
+              profileName,
+              "planetscale-oauth",
+            );
+            if (creds == null || creds.type !== "oauth") {
+              return yield* Effect.fail(
+                new AuthError({
+                  message:
+                    "Planetscale OAuth credentials not found. Run: alchemy login",
+                }),
+              );
+            }
+            // Refresh proactively if the token has expired (or is within
+            // 10s of expiring). Persist the refreshed creds so subsequent
+            // resolves don't repeat the round-trip.
+            const fresh =
+              creds.expires > Date.now() + 10_000
+                ? creds
+                : yield* OAuthClient.refresh(creds).pipe(
+                    Effect.tap((refreshed) =>
+                      store.write(profileName, "planetscale-oauth", refreshed),
+                    ),
+                    Effect.mapError(
+                      (e) =>
+                        new AuthError({
+                          message:
+                            "Planetscale OAuth refresh failed. Run: alchemy login",
+                          cause: e,
+                        }),
+                    ),
+                  );
+            return {
+              type: "oauth" as const,
+              accessToken: Redacted.make(fresh.access),
+              expires: fresh.expires,
+              scopes: fresh.scopes,
+              organization: cfg.organization,
+              source: { type: "oauth" as const },
+            } satisfies PlanetscaleResolvedCredentials;
+          }),
+        ),
         Match.exhaustive,
       );
 
@@ -226,6 +527,30 @@ export const PlanetscaleAuth = AuthProviderLayer<
             .pipe(
               Effect.andThen(
                 Clank.success("Planetscale: stored credentials removed"),
+              ),
+            ),
+        ),
+        Match.when({ method: "oauth" }, () =>
+          store
+            .read<OAuthClient.OAuthCredentials>(
+              profileName,
+              "planetscale-oauth",
+            )
+            .pipe(
+              Effect.tap((creds) =>
+                creds?.type === "oauth"
+                  ? OAuthClient.revoke(creds).pipe(
+                      Effect.catchTag("OAuthError", (err) =>
+                        Clank.warn(
+                          `Planetscale: could not revoke OAuth token: ${err.errorDescription}`,
+                        ),
+                      ),
+                    )
+                  : Effect.void,
+              ),
+              Effect.andThen(store.delete(profileName, "planetscale-oauth")),
+              Effect.andThen(
+                Clank.success("Planetscale: OAuth credentials removed."),
               ),
             ),
         ),
@@ -248,6 +573,39 @@ export const PlanetscaleAuth = AuthProviderLayer<
                 ),
               ),
           ),
+          Match.when({ method: "oauth" }, (c) =>
+            Effect.gen(function* () {
+              const creds = yield* store.read<OAuthClient.OAuthCredentials>(
+                profileName,
+                "planetscale-oauth",
+              );
+
+              if (creds?.type === "oauth") {
+                yield* Clank.info(
+                  "Planetscale: refreshing OAuth credentials...",
+                );
+                yield* OAuthClient.refresh(creds).pipe(
+                  Effect.flatMap((refreshed) =>
+                    store
+                      .write(profileName, "planetscale-oauth", refreshed)
+                      .pipe(
+                        Effect.andThen(
+                          Clank.success(
+                            "Planetscale: OAuth credentials refreshed.",
+                          ),
+                        ),
+                      ),
+                  ),
+                  Effect.catchTag("OAuthError", () =>
+                    oauthLogin(profileName, c.scopes).pipe(Effect.asVoid),
+                  ),
+                );
+                return;
+              }
+
+              yield* oauthLogin(profileName, c.scopes);
+            }),
+          ),
           Match.exhaustive,
         )
         .pipe(
@@ -262,12 +620,32 @@ export const PlanetscaleAuth = AuthProviderLayer<
           const sourceStr = creds.source.details
             ? `${creds.source.type} - ${creds.source.details}`
             : creds.source.type;
-          return Effect.all([
-            Console.log(`  tokenId: ${displayRedacted(creds.token, 3)}`),
-            Console.log(`  token: ${displayRedacted(creds.token, 6)}`),
-            Console.log(`  organization: ${creds.organization}`),
-            Console.log(`  source: ${sourceStr}`),
-          ]);
+          return Match.value(creds).pipe(
+            Match.when({ type: "apiToken" }, (c) =>
+              Effect.all([
+                Console.log(`  tokenId: ${displayRedacted(c.tokenId, 3)}`),
+                Console.log(`  token: ${displayRedacted(c.token, 6)}`),
+                Console.log(`  organization: ${c.organization}`),
+                Console.log(`  source: ${sourceStr}`),
+              ]),
+            ),
+            Match.when({ type: "oauth" }, (c) => {
+              const remainingMs = c.expires - Date.now();
+              const expiresAt = new Date(c.expires).toISOString();
+              const expiresStr =
+                remainingMs <= 0
+                  ? `expired (${expiresAt})`
+                  : `in ${Duration.format(Duration.millis(remainingMs))} (${expiresAt})`;
+              return Effect.all([
+                Console.log(`  accessToken: ${displayRedacted(c.accessToken)}`),
+                Console.log(`  expires: ${expiresStr}`),
+                Console.log(`  scopes: ${c.scopes.join(", ")}`),
+                Console.log(`  organization: ${c.organization}`),
+                Console.log(`  source: ${sourceStr}`),
+              ]);
+            }),
+            Match.exhaustive,
+          );
         }),
         Effect.catch((e) =>
           Console.error(`  Failed to retrieve credentials: ${e}`),
