@@ -86,7 +86,9 @@ export const makeHttpStateStore = ({
             Effect.map((s) =>
               s == null
                 ? undefined
-                : (reviveStateRecursive(s) as ResourceState),
+                : (reviveStateRecursive(
+                    stripServerTimestamps(s),
+                  ) as ResourceState),
             ),
             mapStateStoreError,
           ),
@@ -94,7 +96,10 @@ export const makeHttpStateStore = ({
         state.getReplacedResources({ params: request }).pipe(
           Effect.map((resources) =>
             resources.map(
-              (s) => reviveStateRecursive(s) as ReplacedResourceState,
+              (s) =>
+                reviveStateRecursive(
+                  stripServerTimestamps(s),
+                ) as ReplacedResourceState,
             ),
           ),
           mapStateStoreError,
@@ -162,6 +167,27 @@ export const makeHttpStateStore = ({
     };
     return service;
   });
+
+/**
+ * Strip the server-stamped `createdAt` / `updatedAt` fields from a
+ * persisted state record on the way back into the alchemy engine.
+ *
+ * The wire contract (v6+) attaches these to every resource response so
+ * HTTP-API consumers (e.g. a CLI iterating a deployed state store for
+ * GC) can read them, but the engine itself reasons about `ResourceState`
+ * — which deliberately doesn't carry timestamps. Stripping here keeps
+ * the fields available over HTTP without polluting the in-memory
+ * `ResourceState` (and, transitively, resource `attr` outputs).
+ */
+const stripServerTimestamps = (s: unknown): unknown => {
+  if (s == null || typeof s !== "object" || Array.isArray(s)) return s;
+  const {
+    createdAt: _c,
+    updatedAt: _u,
+    ...rest
+  } = s as Record<string, unknown>;
+  return rest;
+};
 
 /**
  * Predicate over an `HttpClientError`-shaped failure that returns `true`

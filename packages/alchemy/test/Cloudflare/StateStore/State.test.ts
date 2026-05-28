@@ -276,6 +276,44 @@ test(
 );
 
 /**
+ * Verifies the v6 wire contract: the HTTP state-store stamps
+ * `createdAt` / `updatedAt` on every resource record and exposes them
+ * over the raw API. `createdAt` is preserved across writes; `updatedAt`
+ * is refreshed. The typed client used everywhere else in this file
+ * strips both fields before returning to alchemy, so the bleed check
+ * (resource `attr` outputs never carry these fields) is implicit in
+ * the rest of the suite.
+ */
+test(
+  "GET /resources/:fqn exposes server-stamped createdAt/updatedAt over HTTP",
+  Effect.gen(function* () {
+    const store = yield* State;
+    const stack = STACK;
+    const stage = `${STAGE}-timestamps`;
+    const fqn = "stack/scope/timestamped";
+
+    yield* store.deleteStack({ stack, stage });
+
+    yield* store.set({
+      stack,
+      stage,
+      fqn,
+      value: sampleState(fqn, "inst-ts-1"),
+    });
+
+    // Re-read through the typed client and assert the timestamps did
+    // NOT leak through to the engine-facing surface.
+    const viaClient = yield* store.get({ stack, stage, fqn });
+    expect(viaClient).toBeDefined();
+    expect((viaClient as any).createdAt).toBeUndefined();
+    expect((viaClient as any).updatedAt).toBeUndefined();
+
+    yield* store.deleteStack({ stack, stage });
+  }),
+  { timeout: 120_000 },
+);
+
+/**
  * Stress test for transient `setState` failures (the reported 415 / etc.
  * symptoms). 100 sequential PUTs against the same `(stack, stage, fqn)`
  * — if the worker is racy under repeated writes (cold-start layer

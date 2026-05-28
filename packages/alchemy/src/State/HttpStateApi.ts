@@ -24,6 +24,20 @@ import * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity";
  * surfaces as a confusing `415 Unsupported Media Type`. Annotating
  * the schema makes the encoding explicit on both endpoints and the
  * client encoder, so the wire format is unambiguous.
+ *
+ * From contract version 6, server responses for `getState` /
+ * `setState` / `getReplacedResources` include two server-stamped
+ * top-level fields alongside the persisted resource shape:
+ *
+ *   - `createdAt`: ISO-8601 timestamp set on the first write that
+ *     materialised this resource record. Preserved across updates.
+ *   - `updatedAt`: ISO-8601 timestamp refreshed on every write.
+ *
+ * These are exposed for HTTP-API consumers (e.g. a CLI building a
+ * `gc --older-than 14d` over a deployed state store) and are NOT
+ * propagated into the in-memory `ResourceState` the alchemy engine
+ * reasons about — the HTTP client strips them before returning. Pre-v6
+ * records may be missing both fields; the next write stamps them.
  */
 export const ResourceStateSchema = Schema.Any.pipe(HttpApiSchema.asJson());
 
@@ -183,7 +197,7 @@ export const SetStackOutput = HttpApiEndpoint.put(
  * compare against this constant; a mismatch (or 404) triggers a
  * forced redeploy via the bootstrap flow.
  */
-export const STATE_STORE_VERSION = 5 as const;
+export const STATE_STORE_VERSION = 6 as const;
 
 /** Response shape for the unauthenticated `/version` probe. */
 export const VersionResponse = Schema.Struct({

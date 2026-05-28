@@ -137,20 +137,40 @@ export default class Store extends DurableObjectNamespace<Store>()(
 
         /**
          * (Stack DO only) Get a resource by (stage, fqn). Returns
-         * null if missing.
+         * `undefined` if missing.
+         *
+         * From v6 the returned object carries server-stamped
+         * `createdAt` / `updatedAt` ISO timestamps at the top level
+         * alongside the decoded resource shape. Legacy entries
+         * persisted as a bare encrypted string (pre-v6) decode without
+         * timestamps — the next `set` materialises them.
          */
         get: ({ stage, fqn }: { stage: string; fqn: string }) =>
-          storage
-            .get<string>(resourceKey(stage, fqn))
-            .pipe(
-              Effect.flatMap((entry) =>
-                entry == null ? Effect.succeed(undefined) : decryptEntry(entry),
-              ),
-            ),
+          storage.get<StoredEntry | string>(resourceKey(stage, fqn)).pipe(
+            Effect.flatMap((entry) => {
+              if (entry == null) return Effect.succeed(undefined);
+              if (typeof entry === "string") {
+                return decryptEntry(entry);
+              }
+              return decryptEntry(entry.v).pipe(
+                Effect.map((decoded) => ({
+                  ...decoded,
+                  createdAt: entry.createdAt,
+                  updatedAt: entry.updatedAt,
+                })),
+              );
+            }),
+          ),
 
         /**
-         * (Stack DO only) Persist a resource. Returns the stored
-         * value unchanged.
+         * (Stack DO only) Persist a resource and return the stored
+         * shape including server-stamped `createdAt` / `updatedAt`.
+         *
+         * `createdAt` is preserved from the existing entry on update,
+         * or set to "now" on first write. `updatedAt` is refreshed on
+         * every call. Both fields are written unencrypted alongside
+         * the encrypted payload so a GC pass over the state store can
+         * read them without holding the encryption key.
          */
         set: ({
           stage,
@@ -161,14 +181,26 @@ export default class Store extends DurableObjectNamespace<Store>()(
           fqn: string;
           value: ResourceState;
         }) =>
-          encryptValue(value).pipe(
-            Effect.flatMap((encrypted) =>
-              storage
-                .put<string>(resourceKey(stage, fqn), encrypted)
-                .pipe(Effect.asVoid),
-            ),
-            Effect.map(() => value),
-          ),
+          Effect.gen(function* () {
+            const encrypted = yield* encryptValue(value);
+            const now = new Date().toISOString();
+            const existing = yield* storage.get<StoredEntry | string>(
+              resourceKey(stage, fqn),
+            );
+            const createdAt =
+              existing != null &&
+              typeof existing === "object" &&
+              typeof existing.createdAt === "string"
+                ? existing.createdAt
+                : now;
+            const entry: StoredEntry = {
+              v: encrypted,
+              createdAt,
+              updatedAt: now,
+            };
+            yield* storage.put<StoredEntry>(resourceKey(stage, fqn), entry);
+            return { ...value, createdAt, updatedAt: now };
+          }),
 
         /**
          * (Stack DO only) Delete a resource. Idempotent.
@@ -225,20 +257,45 @@ export default class Store extends DurableObjectNamespace<Store>()(
         /**
          * (Stack DO only) Return every resource in a stage whose
          * `status === "replaced"`. Each entry is decrypted so the
-         * `status` field can be inspected.
+         * `status` field can be inspected, and the server-stamped
+         * `createdAt` / `updatedAt` timestamps are attached to each
+         * row for HTTP-API consumers.
          */
         getReplacedResources: ({ stage }: { stage: string }) =>
           pipe(
-            storage.list<string>({ prefix: stagePrefix(stage) }),
+            storage.list<StoredEntry | string>({
+              prefix: stagePrefix(stage),
+            }),
             Effect.map((entries) =>
-              [...entries.values()].filter((e): e is string => !!e),
+              [...entries.values()].filter(
+                (e): e is StoredEntry | string => e != null,
+              ),
             ),
             Effect.flatMap(
-              Effect.forEach(decryptEntry, { concurrency: "unbounded" }),
+              Effect.forEach(
+                (entry) => {
+                  if (typeof entry === "string") {
+                    return decryptEntry(entry);
+                  }
+                  return decryptEntry(entry.v).pipe(
+                    Effect.map((decoded) => ({
+                      ...decoded,
+                      createdAt: entry.createdAt,
+                      updatedAt: entry.updatedAt,
+                    })),
+                  );
+                },
+                { concurrency: "unbounded" },
+              ),
             ),
             Effect.map((decoded) =>
               decoded.filter(
-                (d): d is ReplacedResourceState => d?.status === "replaced",
+                (
+                  d,
+                ): d is ReplacedResourceState & {
+                  createdAt?: string;
+                  updatedAt?: string;
+                } => d?.status === "replaced",
               ),
             ),
           ),
@@ -253,6 +310,23 @@ export default class Store extends DurableObjectNamespace<Store>()(
    */
   static readonly ROOT_DO_NAME = "__root__" as const;
 }
+
+/**
+ * Persisted shape of a resource entry inside the stack DO.
+ *
+ * `v` holds the AES-CTR ciphertext (framed `nonce || ciphertext`,
+ * base64-encoded) so the engine's full resource record stays
+ * encrypted at rest. `createdAt` / `updatedAt` are written
+ * unencrypted alongside it so HTTP-API consumers (e.g. CLIs running a
+ * `gc --older-than 14d`) can read them without holding the encryption
+ * key. Pre-v6 entries were stored as a bare `string`; reads tolerate
+ * both shapes and the next `set` materialises the new shape.
+ */
+type StoredEntry = {
+  v: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 /** NUL byte separator for composite keys. */
 const SEP = "\x00";
