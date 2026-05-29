@@ -6,6 +6,7 @@ export * from "./BrowserRendering/index.ts";
 export * from "./CloudflareEnvironment.ts";
 export * from "./Container/index.ts";
 export * from "./D1/index.ts";
+export * from "./DnsRecord.ts";
 export * from "./EdgeSession.ts";
 export * from "./Fetcher.ts";
 export * from "./Email/index.ts";
