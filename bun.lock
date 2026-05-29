@@ -571,7 +571,7 @@
     "@distilled.cloud/cloudflare-vite-plugin": "0.9.2",
     "@distilled.cloud/core": "^0.21.5",
     "@distilled.cloud/neon": "^0.21.5",
-    "@distilled.cloud/planetscale": "^0.21.5",
+    "@distilled.cloud/planetscale": "https://pkg.distilled.cloud/planetscale/5eecc8e",
     "@effect/language-service": ">=4.0.0-beta.66 || >=4.0.0",
     "@effect/platform-bun": ">=4.0.0-beta.66 || >=4.0.0",
     "@effect/platform-node": ">=4.0.0-beta.66 || >=4.0.0",
@@ -847,7 +847,7 @@
 
     "@distilled.cloud/neon": ["@distilled.cloud/neon@0.21.5", "", { "dependencies": { "@distilled.cloud/core": "0.21.5" }, "peerDependencies": { "effect": ">=4.0.0-beta.66 || >=4.0.0" } }, "sha512-dewLzjMQri5TccmjTI2a7XfKfWCtAE+Zl+En7PTS2lu51Nxs5VToHWa1YBFFohGv2jRZNxLUbAZfnwO0m+5l1A=="],
 
-    "@distilled.cloud/planetscale": ["@distilled.cloud/planetscale@0.21.5", "", { "dependencies": { "@distilled.cloud/core": "0.21.5" }, "peerDependencies": { "effect": ">=4.0.0-beta.66 || >=4.0.0" } }, "sha512-SLdPPsD8vSEkXLhDrm0F/ggqLw4W8AHVDdbuXEHN2Bhv0XVOYvF2wHHxHrpRen6Jo0uWqKGrdaQzmV2dqkdMlQ=="],
+    "@distilled.cloud/planetscale": ["@distilled.cloud/planetscale@https://pkg.distilled.cloud/planetscale/5eecc8e", { "dependencies": { "@distilled.cloud/core": "https://pkg.distilled.cloud/core/5eecc8e" }, "peerDependencies": { "effect": ">=4.0.0-beta.66 || >=4.0.0" } }, "sha512-P3Yw5I0LBKbyou2LoQmuiEwxq6Pbp+SZDUa8KAh7z+4OYmsC+IIwmBegvsQPHC9VoRC9gsLZkHUb+0w1stWuBw=="],
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.11.0", "", {}, "sha512-hD3pekGiPg0WPCCGAZmusBBJsDqGUR66Y452YgQsZOnkdQ7ViEPKuyP4huUGEZQefp8g34RRodXYmJ2TbCH+tg=="],
 
@@ -3898,6 +3898,8 @@
     "@cspotcode/source-map-support/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
 
     "@distilled.cloud/cloudflare-runtime/capnweb": ["capnweb@0.7.0", "", {}, "sha512-zO7tt5ch2tImacaR/oMd7e1dqi/fWU7hjZdvQMv6Yo3v9uUGA8cPIUQGvfQTu2c+NgyE/j/oDmMaUlf1PXyfJw=="],
+
+    "@distilled.cloud/planetscale/@distilled.cloud/core": ["@distilled.cloud/core@https://pkg.distilled.cloud/core/5eecc8e", { "peerDependencies": { "effect": ">=4.0.0-beta.66 || >=4.0.0" } }, "sha512-pbC+2qpEBiSqb1xgwb0A981oWkfBILr2YI0DuDhjsSWtzQn5zTFCtaV6lad7ZQdZq1HoSPIe78Ci5MKANzxIOg=="],
 
     "@effect/platform-node/undici": ["undici@8.3.0", "", {}, "sha512-TkUDgb6tl7KOGZ+7e8E3d2FYgUQgF6z5YypqjWmixVQSQERFcVrVg0ySADm2LVLRh5ljAaHTCR5Fmz3Q34rB7Q=="],
 
