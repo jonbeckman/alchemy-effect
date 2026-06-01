@@ -10,7 +10,7 @@ import { asEffect } from "../../Util/types.ts";
 import { isAiGateway } from "../AiGateway/AiGateway.ts";
 import { isAnalyticsEngineDataset } from "../AnalyticsEngine/AnalyticsEngineDataset.ts";
 import { isArtifacts } from "../Artifacts/Artifacts.ts";
-import { isBrowserRendering } from "../BrowserRendering/BrowserRendering.ts";
+import { isBrowser } from "../Browser/Browser.ts";
 import { isD1Database } from "../D1/D1Database.ts";
 import { isSendEmail } from "../Email/SendEmail.ts";
 import { isHyperdrive } from "../Hyperdrive/Hyperdrive.ts";
@@ -19,8 +19,11 @@ import { isImages } from "../Images/Images.ts";
 import { isKVNamespace } from "../KV/KVNamespace.ts";
 import { isQueue } from "../Queue/Queue.ts";
 import { isR2Bucket } from "../R2/R2Bucket.ts";
+import { isRateLimit } from "../RateLimit/RateLimit.ts";
+import { isVectorizeIndex } from "../Vectorize/VectorizeIndex.ts";
 import { isAssets } from "./Assets.ts";
 import { isDurableObjectNamespaceLike } from "./DurableObjectNamespace.ts";
+import { isDynamicWorkerLoader } from "./DynamicWorkerLoader.ts";
 import type { WorkerBindingProps } from "./Worker.ts";
 import { isWorker, type Worker, type WorkerProps } from "./Worker.ts";
 import type { WorkerBinding, WorkerBindingResource } from "./WorkerBinding.ts";
@@ -118,7 +121,7 @@ const toBinding = (
       type: "images",
       name: bindingName,
     };
-  } else if (isBrowserRendering(binding)) {
+  } else if (isBrowser(binding)) {
     return {
       type: "browser",
       name: bindingName,
@@ -128,6 +131,13 @@ const toBinding = (
       type: "analytics_engine",
       name: bindingName,
       dataset: binding.dataset,
+    };
+  } else if (isRateLimit(binding)) {
+    return {
+      type: "ratelimit",
+      name: bindingName,
+      namespaceId: binding.namespaceId,
+      simple: binding.simple,
     };
   } else if (isSendEmail(binding)) {
     return {
@@ -147,7 +157,7 @@ const toBinding = (
   } else if (isD1Database(binding)) {
     return {
       type: "d1",
-      id: binding.databaseId,
+      databaseId: binding.databaseId,
       name: bindingName,
     };
   } else if (isR2Bucket(binding)) {
@@ -190,6 +200,17 @@ const toBinding = (
       name: bindingName,
       service: binding.workerName,
     };
+  } else if (isVectorizeIndex(binding)) {
+    return {
+      type: "vectorize",
+      name: bindingName,
+      indexName: binding.indexName,
+    };
+  } else if (isDynamicWorkerLoader(binding)) {
+    return {
+      type: "worker_loader",
+      name: bindingName,
+    } as any;
   } else {
     return {
       type: "json",
