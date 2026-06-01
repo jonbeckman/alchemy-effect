@@ -684,8 +684,10 @@ export const R2BucketProvider = () =>
 
           const attrs = {
             bucketName: observed.name!,
-            storageClass: observed.storageClass ?? "Standard",
-            jurisdiction: observed.jurisdiction ?? "default",
+            storageClass: (observed.storageClass ??
+              "Standard") as R2Bucket.StorageClass,
+            jurisdiction: (observed.jurisdiction ??
+              "default") as R2Bucket.Jurisdiction,
             location: normalizeLocation(observed.location),
             accountId: acct,
           };
@@ -738,8 +740,10 @@ export const R2BucketProvider = () =>
           }).pipe(
             Effect.map((bucket) => ({
               bucketName: bucket.name!,
-              storageClass: bucket.storageClass ?? "Standard",
-              jurisdiction: bucket.jurisdiction ?? "default",
+              storageClass: (bucket.storageClass ??
+                "Standard") as R2Bucket.StorageClass,
+              jurisdiction: (bucket.jurisdiction ??
+                "default") as R2Bucket.Jurisdiction,
               location: normalizeLocation(bucket.location),
               accountId: acct,
               domains: output?.domains ?? [],
@@ -760,13 +764,20 @@ const r2BucketEndpointConsistencySchedule = Schedule.exponential(100).pipe(
   Schedule.both(Schedule.recurs(5)),
 );
 
+// Cloudflare's SDK types these enums as open unions (`(string & {})`); the
+// API only ever returns the documented members, which we narrow on the way out.
 type CustomDomainResponse = {
   domain: string;
   zoneId?: string | null;
   enabled?: boolean | null;
   ciphers?: string[] | null;
-  minTLS?: "1.0" | "1.1" | "1.2" | "1.3" | null;
-  status?: R2Bucket.CustomDomain["status"];
+  minTLS?: "1.0" | "1.1" | "1.2" | "1.3" | (string & {}) | null;
+  status?:
+    | {
+        ownership: string;
+        ssl: string;
+      }
+    | undefined;
 };
 
 const toCustomDomainAttributes = (
@@ -776,8 +787,8 @@ const toCustomDomainAttributes = (
   zoneId: domain.zoneId ?? undefined,
   enabled: domain.enabled ?? true,
   ciphers: domain.ciphers ?? undefined,
-  minTLS: domain.minTLS ?? undefined,
-  status: domain.status,
+  minTLS: (domain.minTLS ?? undefined) as R2Bucket.CustomDomain["minTLS"],
+  status: domain.status as R2Bucket.CustomDomain["status"],
 });
 
 const sameCustomDomainConfig = (

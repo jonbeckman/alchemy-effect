@@ -83,13 +83,14 @@ export const UserApiTokenProvider = () =>
         tokenData: {
           id?: string | null;
           name?: string | null;
-          status?: "active" | "disabled" | "expired" | null;
+          status?: "active" | "disabled" | "expired" | (string & {}) | null;
         },
         value: Redacted.Redacted<string>,
       ): UserApiTokenAttributes => ({
         tokenId: tokenData.id ?? "",
         name: tokenData.name ?? "",
-        status: tokenData.status ?? "active",
+        status: (tokenData.status ??
+          "active") as UserApiTokenAttributes["status"],
         value,
       });
 

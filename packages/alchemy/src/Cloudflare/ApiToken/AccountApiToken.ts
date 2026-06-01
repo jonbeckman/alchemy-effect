@@ -96,14 +96,15 @@ export const AccountApiTokenProvider = () =>
         tokenData: {
           id?: string | null;
           name?: string | null;
-          status?: "active" | "disabled" | "expired" | null;
+          status?: "active" | "disabled" | "expired" | (string & {}) | null;
         },
         value: Redacted.Redacted<string>,
         accountId: string,
       ): AccountApiTokenAttributes => ({
         tokenId: tokenData.id ?? "",
         name: tokenData.name ?? "",
-        status: tokenData.status ?? "active",
+        status: (tokenData.status ??
+          "active") as AccountApiTokenAttributes["status"],
         value,
         accountId,
       });

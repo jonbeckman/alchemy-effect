@@ -224,7 +224,9 @@ export const ZoneProvider = () =>
           // Owned path: we have persisted state (our own zoneId) — refresh it.
           if (output?.zoneId) {
             const result = yield* get({ zoneId: output.zoneId }).pipe(
-              Effect.catch(() => Effect.succeed(undefined)),
+              Effect.catchTag("InvalidZoneIdentifier", () =>
+                Effect.succeed(undefined),
+              ),
             );
             if (result) return toZoneAttributes(result, accountId);
           }
@@ -286,13 +288,10 @@ export const ZoneProvider = () =>
         }),
         delete: Effect.fn(function* ({ output }) {
           if (!output.zoneId) return;
+          // Zone already gone — idempotent delete. A deleted zone's id no
+          // longer resolves, so Cloudflare returns `InvalidZoneIdentifier`.
           yield* del({ zoneId: output.zoneId }).pipe(
-            Effect.catch((error: unknown) => {
-              // Zone already gone — idempotent delete.
-              const status = (error as { status?: number }).status;
-              if (status === 404) return Effect.void;
-              return Effect.fail(error);
-            }),
+            Effect.catchTag("InvalidZoneIdentifier", () => Effect.void),
           );
         }),
       };

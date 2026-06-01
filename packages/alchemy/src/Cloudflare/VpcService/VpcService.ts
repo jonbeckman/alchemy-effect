@@ -262,7 +262,7 @@ export const formatVpcService = (
   service: {
     serviceId?: string | null;
     name: string;
-    type: "http" | "tcp";
+    type: "http" | "tcp" | (string & {});
     createdAt?: string | null;
     updatedAt?: string | null;
     httpPort?: number | null;
@@ -300,7 +300,7 @@ export const formatVpcService = (
   return {
     serviceId: service.serviceId!,
     serviceName: service.name,
-    serviceType: service.type,
+    serviceType: service.type as "http" | "tcp",
     httpPort: service.httpPort ?? undefined,
     httpsPort: service.httpsPort ?? undefined,
     host,

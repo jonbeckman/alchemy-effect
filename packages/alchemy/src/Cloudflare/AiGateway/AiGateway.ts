@@ -448,7 +448,7 @@ export const AiGatewayProvider = () =>
         rateLimitingLimit: nullIfZero(gateway.rateLimitingLimit),
         rateLimitingTechnique: gateway.rateLimitingTechnique ?? "fixed",
         authentication: gateway.authentication ?? false,
-        dlp: gateway.dlp ?? undefined,
+        dlp: (gateway.dlp ?? undefined) as AiGateway["Attributes"]["dlp"],
         isDefault: gateway.isDefault ?? false,
         logManagement: gateway.logManagement ?? 100_000,
         logManagementStrategy:

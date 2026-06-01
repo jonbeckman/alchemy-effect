@@ -90,13 +90,16 @@ const normalize = (
     priority?: number | null;
     matchers?:
       | {
-          type: "all" | "literal";
-          field?: "to" | null;
+          type: "all" | "literal" | (string & {});
+          field?: "to" | (string & {}) | null;
           value?: string | null;
         }[]
       | null;
     actions?:
-      | { type: "drop" | "forward" | "worker"; value?: string[] | null }[]
+      | {
+          type: "drop" | "forward" | "worker" | (string & {});
+          value?: string[] | null;
+        }[]
       | null;
   },
   zoneId: string,

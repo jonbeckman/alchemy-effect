@@ -253,7 +253,7 @@ const toAttributes = (
 ): VectorizeIndexAttributes => ({
   indexName: index.name ?? name,
   dimensions: index.config?.dimensions,
-  metric: index.config?.metric,
+  metric: index.config?.metric as VectorizeIndexAttributes["metric"],
   description: index.description ?? undefined,
   accountId,
   createdOn: index.createdOn ?? undefined,

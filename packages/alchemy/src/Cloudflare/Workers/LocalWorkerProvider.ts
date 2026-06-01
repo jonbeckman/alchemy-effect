@@ -595,8 +595,9 @@ const toRuntimeAssets = (
     directory: "directory" in assets ? assets.directory : assets.path,
     headers: assets.config?.headers,
     redirects: assets.config?.redirects,
-    htmlHandling: assets.config?.htmlHandling,
-    notFoundHandling: assets.config?.notFoundHandling,
+    htmlHandling: assets.config?.htmlHandling as RuntimeAssets["htmlHandling"],
+    notFoundHandling: assets.config
+      ?.notFoundHandling as RuntimeAssets["notFoundHandling"],
     runWorkerFirst: assets.config?.runWorkerFirst,
     serveDirectly: assets.config?.serveDirectly,
   };

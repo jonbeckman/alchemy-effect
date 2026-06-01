@@ -91,6 +91,11 @@ const resolveScopes = (scopes: string[] | undefined): string[] =>
 const resolveName = (id: string, name: string | undefined): string =>
   name ?? id;
 
+// Cloudflare's SDK types `status` as an open enum (`(string & {})`); in
+// practice it is always one of these three.
+const asStatus = (status: string): "pending" | "active" | "deleted" =>
+  status as "pending" | "active" | "deleted";
+
 export const StoreSecretProvider = () =>
   Provider.effect(
     Secret,
@@ -132,7 +137,7 @@ export const StoreSecretProvider = () =>
                 id: string;
                 name: string;
                 storeId: string;
-                status: "pending" | "active" | "deleted";
+                status: "pending" | "active" | "deleted" | (string & {});
                 comment?: string | null;
               }
             | undefined;
@@ -188,7 +193,7 @@ export const StoreSecretProvider = () =>
                 secretName: secret.name,
                 storeId: secret.storeId,
                 accountId,
-                status: secret.status,
+                status: asStatus(secret.status),
                 scopes,
                 comment: secret.comment ?? undefined,
               };
@@ -223,7 +228,7 @@ export const StoreSecretProvider = () =>
             secretName: observed.name,
             storeId: observed.storeId,
             accountId,
-            status: patched.status,
+            status: asStatus(patched.status),
             scopes,
             comment: patched.comment ?? undefined,
           };
@@ -253,7 +258,7 @@ export const StoreSecretProvider = () =>
                 secretName: secret.name,
                 storeId: secret.storeId,
                 accountId: output.accountId,
-                status: secret.status,
+                status: asStatus(secret.status),
                 scopes: output.scopes,
                 comment: secret.comment ?? undefined,
               })),
@@ -286,7 +291,7 @@ export const StoreSecretProvider = () =>
             secretName: match.name,
             storeId: match.storeId,
             accountId: olds.store.accountId,
-            status: match.status,
+            status: asStatus(match.status),
             scopes: resolveScopes(olds.scopes),
             comment: match.comment ?? undefined,
           });
