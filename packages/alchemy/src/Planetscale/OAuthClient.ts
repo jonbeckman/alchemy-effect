@@ -36,9 +36,9 @@ export interface Authorization {
  * itself, not requested per-authorization. Rotate by registering a new
  * secret and cutting a release.
  */
-export const OAUTH_CLIENT_ID = "pscale_app_58be5589d14a0fef9717d5308f9eee33";
+export const OAUTH_CLIENT_ID = "pscale_app_ffcde16b861782f3de2c154ef09e4ee0";
 export const OAUTH_CLIENT_SECRET =
-  "pscale_app_secret_PpwiuCnzwDhY1sW3Xj8F5aAS34QOEtHNSrzqcuPMumg";
+  "pscale_app_secret_hoILs96A4b9WYuiwPEEdDK5IFvSe8EzYzbejSc7TGTU";
 
 export const OAUTH_REDIRECT_URI = "http://localhost:9976/auth/callback";
 export const OAUTH_ENDPOINTS = {
@@ -123,14 +123,15 @@ const tokenRequest = (
 
 /**
  * Generate a PlanetScale authorization URL. Scopes are configured on the
- * OAuth application, so only `client_id`, `redirect_uri`, and a CSRF
- * `state` are sent.
+ * OAuth application's dashboard at app.planetscale.com — there's no
+ * `scope` query parameter on this endpoint (PlanetScale rejects it).
  */
 export function authorize(): Authorization {
   const state = generateState();
   const url = new URL(OAUTH_ENDPOINTS.authorize);
   url.searchParams.set("client_id", OAUTH_CLIENT_ID);
   url.searchParams.set("redirect_uri", OAUTH_REDIRECT_URI);
+  url.searchParams.set("response_type", "code");
   url.searchParams.set("state", state);
   return { url: url.toString(), state };
 }
