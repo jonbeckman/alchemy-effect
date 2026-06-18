@@ -555,7 +555,7 @@ export const LocalWorkerProvider = () =>
     }),
   );
 
-const toRuntimeBinding = Effect.fnUntraced(function* (b: WorkerBinding) {
+export const toRuntimeBinding = Effect.fnUntraced(function* (b: WorkerBinding) {
   const unsupported = () =>
     new WorkerValidationError({
       message: `${b.type} bindings are not supported in local mode`,
@@ -635,7 +635,11 @@ const toRuntimeBinding = Effect.fnUntraced(function* (b: WorkerBinding) {
         allowedSenderAddresses: b.allowedSenderAddresses,
       });
     case "service":
-      return Service.local({ binding: b.name, scriptName: b.service });
+      return Service.local({
+        binding: b.name,
+        scriptName: b.service,
+        entrypoint: b.entrypoint,
+      });
     case "text_blob":
       return Data.local(b.name, Buffer.from(b.part));
     case "vectorize":
