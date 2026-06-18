@@ -28,6 +28,7 @@ import type { DurableObjectNamespaceLike } from "./DurableObjectNamespace.ts";
 import type { DynamicWorkerLoader } from "./DynamicWorkerLoader.ts";
 import { makeRpcStub } from "./Rpc.ts";
 import type { VersionMetadata } from "./VersionMetadata.ts";
+import type { WorkflowResource } from "./Workflow.ts";
 import { isWorker, Worker, WorkerEnvironment } from "./Worker.ts";
 
 export type WorkerBinding = Exclude<
@@ -39,6 +40,12 @@ export type WorkerSettingsBinding = Exclude<
   workers.GetScriptScriptAndVersionSettingResponse["bindings"],
   null | undefined
 >[number];
+
+export interface WorkerEntrypointBinding<Shape extends object = object> {
+  readonly BindingType: "Cloudflare.WorkerEntrypointBinding";
+  readonly service: string;
+  readonly entrypoint: string;
+}
 
 export type WorkerBindingResource =
   // Config values
@@ -65,7 +72,9 @@ export type WorkerBindingResource =
   | VectorizeIndex
   | Secret
   | Worker
+  | WorkerEntrypointBinding<any>
   | DynamicWorkerLoader
+  | WorkflowResource
   | VersionMetadata
   | DurableObjectNamespaceLike<any>;
 

@@ -29,7 +29,12 @@ import { isDynamicWorkerLoader } from "./DynamicWorkerLoader.ts";
 import { isVersionMetadata } from "./VersionMetadata.ts";
 import type { WorkerBindingProps } from "./Worker.ts";
 import { isWorker, type Worker, type WorkerProps } from "./Worker.ts";
-import type { WorkerBinding, WorkerBindingResource } from "./WorkerBinding.ts";
+import type {
+  WorkerBinding,
+  WorkerBindingResource,
+  WorkerEntrypointBinding,
+} from "./WorkerBinding.ts";
+import type { WorkflowResource } from "./Workflow.ts";
 
 export const bindWorkerAsyncBindings = Effect.fnUntraced(function* (
   resource: Worker,
@@ -75,7 +80,7 @@ type BindingSpec = InputProps<
   Exclude<PutScriptRequest["metadata"]["bindings"], undefined>[number]
 >;
 
-const toBinding = (
+export const toBinding = (
   bindingName: string,
   binding: WorkerBindingResource,
 ): BindingSpec => {
@@ -219,6 +224,21 @@ const toBinding = (
       name: bindingName,
       service: binding.workerName,
     };
+  } else if (isWorkerEntrypointBinding(binding)) {
+    return {
+      type: "service",
+      name: bindingName,
+      service: binding.service,
+      entrypoint: binding.entrypoint,
+    };
+  } else if (isWorkflowResource(binding)) {
+    return {
+      type: "workflow",
+      name: bindingName,
+      workflowName: binding.workflowName,
+      className: binding.className,
+      scriptName: binding.scriptName,
+    };
   } else if (isVectorizeIndex(binding)) {
     return {
       type: "vectorize",
@@ -250,6 +270,20 @@ const toBinding = (
     };
   }
 };
+
+const hasBindingType = (binding: unknown, type: string) =>
+  typeof binding === "object" &&
+  binding !== null &&
+  "BindingType" in binding &&
+  binding.BindingType === type;
+
+const isWorkerEntrypointBinding = (
+  binding: unknown,
+): binding is WorkerEntrypointBinding =>
+  hasBindingType(binding, "Cloudflare.WorkerEntrypointBinding");
+
+const isWorkflowResource = (binding: unknown): binding is WorkflowResource =>
+  hasBindingType(binding, "Cloudflare.Workflow");
 
 export const getCronBindings = (
   bindings: ReadonlyArray<ResourceBinding<Worker["Binding"]>>,
